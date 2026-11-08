@@ -22,6 +22,7 @@
 #define TLV_HELLO                 0x01U
 #define TLV_TEMP                  0x02U
 #define TLV_PERFORM               0x10U
+#define TLV_SET_LAMPS             0x11U
 #define TLV_HEARTBEAT             0x20U
 #define TLV_THERMAL_CONFIG        0x30U
 #define TLV_ALL_OFF               0x7FU
@@ -361,6 +362,27 @@ static void process_tlvs(const uint8_t *payload, uint16_t payload_len,
             handle_perform(value, length, now_ms);
             break;
 
+        case TLV_SET_LAMPS:
+            if (length != (uint8_t)(APP_PERF_LAMP_COUNT * 2U))
+            {
+                s_faults |= FAULT_FORMAT;
+            }
+            else if (!s_session_active)
+            {
+                s_need_hello = true;
+                s_faults |= FAULT_NEED_HELLO;
+            }
+            else
+            {
+                uint16_t duties[APP_PERF_LAMP_COUNT];
+                for (uint32_t i = 0; i < APP_PERF_LAMP_COUNT; i++)
+                {
+                    duties[i] = rd16(&value[i * 2U]);
+                }
+                app_perf_set_lamps(duties, now_ms);
+            }
+            break;
+
         case TLV_HEARTBEAT:
             if (length != 8U)
             {
@@ -502,7 +524,7 @@ static void build_status_frame(uint32_t now_ms)
     caps[2] = (uint8_t)BOARD_PWM_COUNT;
     caps[3] = 0U;
     wr32(&caps[4], FEATURE_PERFORM | FEATURE_TEMP |
-                   FEATURE_HEARTBEAT | FEATURE_EGG);
+                   FEATURE_HEARTBEAT | FEATURE_EGG | FEATURE_DIRECT);
     offset = append_tlv(payload, offset, TLV_CAPS, caps, sizeof(caps));
 
     frame_begin(s_tx_frame, FRAME_TYPE_STATUS, s_tx_seq++, s_session_id, offset);

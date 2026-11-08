@@ -46,6 +46,13 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(valid, 1)
         self.assertEqual(source, 1)
 
+    def test_set_lamps_layout(self):
+        duties = list(range(13))
+        raw = p.set_lamps(duties)
+        self.assertEqual(raw[0], p.TLV_SET_LAMPS)
+        self.assertEqual(raw[1], 26)
+        self.assertEqual(struct.unpack("<13H", raw[2:]), tuple(duties))
+
     def test_perform_layout(self):
         raw = p.perform(0x3, p.ACTION_GATE, 11, 0, 0)
         self.assertEqual(raw[0], p.TLV_PERFORM)

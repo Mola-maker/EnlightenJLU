@@ -69,6 +69,7 @@ class Stm32SpiLink:
         self._event_seq = 1
         self._hello_pending = True
         self._pending_event: tuple[bytes, int] | None = None
+        self._direct_duties = None
         self._temp: bytes | None = None
         self._temp_sent_at = 0.0
         self._last_status = None
@@ -91,9 +92,24 @@ class Stm32SpiLink:
         with self._lock:
             self._temp = p.temp(temp_mc, sample_seq, age_ms, valid, source)
 
+    def set_lamps(self, duties) -> None:
+        if len(duties) != p.LAMP_COUNT:
+            raise ValueError(f"expected {p.LAMP_COUNT} lamp duties")
+        with self._lock:
+            self._direct_duties = [
+                max(0, min(1000, int(duty))) for duty in duties
+            ]
+            self._pending_event = None
+
+    def clear_lamps(self) -> None:
+        with self._lock:
+            self._direct_duties = None
+
     def queue_perform(self, glyph_mask: int, action: int,
                       profile_id: int = 0, value: int = 0) -> int:
-        event_seq = self._event_seq
+        with self._lock:
+            self._direct_duties = None
+            event_seq = self._event_seq
         self._event_seq += 1
         event = p.perform(glyph_mask, action, event_seq, profile_id, value)
         with self._lock:
@@ -102,6 +118,7 @@ class Stm32SpiLink:
 
     def queue_all_off(self) -> None:
         with self._lock:
+            self._direct_duties = None
             self._pending_event = (p.all_off(), -1)
 
     def _payload(self, now: float) -> bytes:
@@ -119,6 +136,8 @@ class Stm32SpiLink:
 
         if self._pending_event is not None:
             chunks.append(self._pending_event[0])
+        elif self._direct_duties is not None:
+            chunks.append(p.set_lamps(self._direct_duties))
         elif not self._hello_pending:
             chunks.append(p.heartbeat(
                 maix_uptime_ms=int((now - self._started) * 1000),

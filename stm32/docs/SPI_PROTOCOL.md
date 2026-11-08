@@ -131,6 +131,19 @@ STM32 支持版本 1。收到合法 HELLO 后进入 ACTIVE，所有字牌保持 
 
 `event_seq` 按会话递增，从 1 开始。重复的 `event_seq` 不会再次执行；主机在收到 ACK 前可重发同一事件。
 
+#### SET_LAMPS = 0x11，len = 26
+
+```text
+u16 duty_permille[13]     PWM1..PWM13，0..1000
+```
+
+- 数组顺序固定为 PWM1、PWM2、…、PWM13；
+- 只控制 13 路灯牌，HEAT1/HEAT2 不参与，始终为 0%；
+- 收到后进入 DIRECT 模式，立即覆盖固件表演曲线；
+- 任意 PERFORM 或 ALL_OFF 会退出 DIRECT 模式；
+- 主机需要周期性重发当前亮度，建议 20–50 Hz，以保持动画和链路；
+- 新固件在 CAPS 中置 `DIRECT`（bit 5）。
+
 #### HEARTBEAT = 0x20，len = 8
 
 ```text
@@ -187,7 +200,7 @@ v1 不实现加热/PID。收到该 TLV 时 STM32 置 `HEATER_UNSUPPORTED`，HEAT
 | 2 | HEARTBEAT |
 | 3 | EGG |
 | 4 | THERMAL_PID（v1 为 0） |
-| 5 | DIRECT（v1 为 0） |
+| 5 | DIRECT（web 直控固件为 1） |
 
 ## 4. 故障位
 
@@ -312,6 +325,7 @@ GLYPH_ALL_LAMPS (bit 2, "全灯") -> 测试扩展：聚合 PWM1..PWM13
 - “春” → PWM2 → TIM2_CH2 / PA1 / 2 kHz
 - “全灯”测试逻辑字牌（bit 2）→ PWM1–PWM13，排除 HEAT
 - 15 路 PWM 全部初始化为 0
+- web 固件支持 `SET_LAMPS`，可独立设置 PWM1–PWM13 的 0..1000‰ 亮度
 - HEAT1/HEAT2 固定 0%
 - 仅接收温度并在 STATUS 回显，不做 PID
 - SPI 超时 500 ms，超时后全部输出关闭

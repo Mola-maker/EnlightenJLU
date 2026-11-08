@@ -20,6 +20,7 @@ TYPE_STATUS = 0x81
 TLV_HELLO = 0x01
 TLV_TEMP = 0x02
 TLV_PERFORM = 0x10
+TLV_SET_LAMPS = 0x11
 TLV_HEARTBEAT = 0x20
 TLV_THERMAL_CONFIG = 0x30
 TLV_ALL_OFF = 0x7F
@@ -57,6 +58,7 @@ FEATURE_HEARTBEAT = 1 << 2
 FEATURE_EGG = 1 << 3
 FEATURE_THERMAL_PID = 1 << 4
 FEATURE_DIRECT = 1 << 5
+LAMP_COUNT = 13
 
 
 def crc16_ccitt(data: bytes) -> int:
@@ -162,6 +164,14 @@ def perform(glyph_mask: int, action: int, event_seq: int,
                                         profile_id & 0xFF,
                                         event_seq & 0xFFFFFFFF,
                                         value & 0xFFFF))
+
+
+def set_lamps(duties) -> bytes:
+    if len(duties) != LAMP_COUNT:
+        raise ValueError(f"expected {LAMP_COUNT} lamp duties")
+    return tlv(TLV_SET_LAMPS,
+               struct.pack("<13H", *(max(0, min(1000, int(d)))
+                                     for d in duties)))
 
 
 def heartbeat(maix_uptime_ms: int, state_flags: int = 0) -> bytes:

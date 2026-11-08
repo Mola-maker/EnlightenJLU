@@ -53,7 +53,7 @@ st-flash --reset write stm32/firmware/PWM-Heater.bin 0x08000000
 | 待机呼吸 | 1%–8%，4 s 周期 |
 | GATE/HOLD/RELEASE | 30 ms 上升；保持；2.5 s 渐弱 |
 | EGG | 1.6 s 5 Hz 亮灭，再熄灭 2 s |
-| SPI v1 | HELLO/TEMP/PERFORM/HEARTBEAT/ALL_OFF/THERMAL_CONFIG |
+| SPI v1 | HELLO/TEMP/PERFORM/SET_LAMPS/HEARTBEAT/ALL_OFF/THERMAL_CONFIG |
 | 状态 | STATUS + CAPS，温度、链路、故障、字牌状态 |
 | 安全 | 500 ms 无合法控制帧，全部输出关闭 |
 | 加热 | v1 固定 0%，无 PID |
@@ -78,6 +78,7 @@ Q1/Q2 为 AO3400A N-MOS 低边开关，HEAT 高电平导通。默认 `HEAT1=HEAT
 
 - `GLYPH_ALL_LAMPS`（glyph bit 2，mask `0x4`）：驱动 PWM1–PWM13，排除 HEAT1/HEAT2；
 - `TEMP` TLV 到达时通过 USART3 打印 `[temp] ... mC ...`，便于 1 Hz 温度观测；
+- web 固件增加 `SET_LAMPS`，支持 PWM1–PWM13 独立亮度（`firmware/PWM-Heater-web.*`）；
 - 每路灯 PWM 取所有活跃 glyph 的最大占空比，避免 `GLYPH_ALL_LAMPS` 归零时
   覆盖 `长`/`春` 等单字 PWM，保持原业务可叠加。
 

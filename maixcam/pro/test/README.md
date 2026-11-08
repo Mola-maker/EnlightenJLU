@@ -106,9 +106,20 @@ GATE/HOLD，再执行 RELEASE，最后回到待机呼吸。
 cd /root/surplife/test
 nohup sh -c 'python3 -u main.py --no-spi 2>&1 |
   tee /root/surplife/run/kws_live.log |
-  python3 -u tools/spi_service.py --hold 1.2 --frequency 500000' \
+  python3 -u tools/spi_service.py --hold 1.2 --frequency 500000 --web-port 80' \
   </dev/null >/root/surplife/run/spi_live.log 2>&1 &
 ```
+
+Web 控制台：
+
+```text
+http://192.168.43.229/
+```
+
+服务优先监听 80；如果 80 已占用会自动使用 8080。网页包含 13 路灯位预览、
+整体亮度、常亮/呼吸/波浪/追逐/星光、目标灯组、关键词待机、固件预设特效，
+适配手机端。亮度滑杆需要先烧录 `PWM-Heater-web.bin`；未烧录时页面会显示
+“待升级”，只更新浏览器预览，不覆盖 STM32 的待机呼吸。
 
 停止时先停 SPI 服务，让它发送 `ALL_OFF`：
 
@@ -167,17 +178,22 @@ glyphs=(0, 0, 4) -> glyphs=(0, 0, 1)
 本目录已放入新测试固件和回退固件：
 
 ```text
-firmware/PWM-Heater-test.hex        # 新：GLYPH_ALL_LAMPS + [temp] 打印
+firmware/PWM-Heater-test.hex        # GLYPH_ALL_LAMPS + [temp]
 firmware/PWM-Heater-test.bin
+firmware/PWM-Heater-web.hex         # Web 直控：SET_LAMPS，13 路亮度
+firmware/PWM-Heater-web.bin
 firmware/PWM-Heater-v1-base.hex      # 旧：已验证基线
 firmware/PWM-Heater-v1-base.bin
 ```
 
-新固件 SHA256：
+测试固件 SHA256：
 
 ```text
 PWM-Heater-test.bin
 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
+
+PWM-Heater-web.bin
+f5c5dfec91ca924a7b24d93aaa50c960ee8ecf7a35351cbace8bbe62a4378bae
 ```
 
 烧录命令（在 ST-Link 所在主机上执行）：
@@ -187,8 +203,14 @@ st-flash --reset write firmware/PWM-Heater-test.bin 0x08000000
 ```
 
 必须用 ST-Link 烧录 `PWM-Heater-test.bin` 到 STM32 后，SPI 才会返回有效
-STATUS。2026-11-06 已在工作站上通过 ST-Link V2 烧录并校验通过；但 MaixCAM Pro
-与 STM32 还未连接，SPI、13 路灯牌动作和 USART3 温度打印仍需整机验证。
+STATUS。网页任意亮度控制还需要烧录 `PWM-Heater-web.bin`：
+
+```sh
+st-flash --reset write firmware/PWM-Heater-web.bin 0x08000000
+```
+
+烧录后 CAPS features 应为 `0x2F`（含 `DIRECT`），网页会隐藏“待升级”提示，
+亮度滑杆和 13 路灯效才会直接控制真实 PWM。
 
 ## 6. 自检
 

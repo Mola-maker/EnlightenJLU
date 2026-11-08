@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#080b12">
+  <title>JLU Lamp Lab · 13路灯牌控制</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <div>
+          <p class="eyebrow">JLU · LAMP CONTROL</p>
+          <h1>灯牌实验室</h1>
+        </div>
+      </div>
+      <div class="top-status">
+        <div id="connection" class="status-pill offline">
+          <span class="dot"></span><span id="connectionText">连接中</span>
+        </div>
+        <div class="status-pill subtle" id="modePill">KWS 待机</div>
+      </div>
+    </header>
+
+    <section class="hero panel">
+      <div class="hero-copy">
+        <p class="eyebrow">13 CHANNEL PWM</p>
+        <h2 id="heroTitle">呼吸，正在发生。</h2>
+        <p class="hero-sub" id="heroSub">PWM1–PWM13 已接入。HEAT1 / HEAT2 始终保持关闭。</p>
+        <div class="hero-meta">
+          <span class="meta-item"><i class="meta-dot live"></i><span id="linkText">等待链路</span></span>
+          <span class="meta-item"><span id="fpsText">20 Hz</span> 总线</span>
+          <span class="meta-item" id="brightnessReadout">75% 亮度</span>
+        </div>
+      </div>
+
+      <div class="lamp-stage" aria-label="13路灯牌预览">
+        <div class="stage-aura"></div>
+        <div id="lampStage" class="lamp-row"></div>
+        <div class="stage-caption">
+          <span>PWM 01</span><span>·</span><span>PWM 13</span>
+        </div>
+      </div>
+    </section>
+
+    <div class="layout">
+      <section class="panel control-panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">LIVE CONTROL</p>
+            <h3>灯光控制</h3>
+          </div>
+          <span class="live-chip"><span></span>实时</span>
+        </div>
+
+        <div class="slider-block">
+          <div class="row-between">
+            <label for="brightness">整体亮度</label>
+            <output id="brightnessValue" for="brightness">75%</output>
+          </div>
+          <input id="brightness" class="range" type="range" min="0" max="100" step="1" value="75">
+          <div class="range-labels"><span>关闭</span><span>柔和</span><span>全亮</span></div>
+        </div>
+
+        <div class="control-group">
+          <div class="row-between">
+            <span class="group-label">目标灯组</span>
+            <span class="hint" id="targetHint">全部 13 路</span>
+          </div>
+          <div class="segmented" id="targetPresets">
+            <button type="button" class="seg is-active" data-target="8191">全灯</button>
+            <button type="button" class="seg" data-target="1">长</button>
+            <button type="button" class="seg" data-target="2">春</button>
+            <button type="button" class="seg" data-target="custom">自定义</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <div class="row-between">
+            <span class="group-label">动态灯效</span>
+            <span class="hint">在浏览器中平滑预览</span>
+          </div>
+          <div class="effect-grid" id="effectGrid">
+            <button type="button" class="effect-card" data-effect="solid">
+              <span class="effect-icon icon-sun"></span>
+              <strong>常亮</strong><small>稳定输出</small>
+            </button>
+            <button type="button" class="effect-card is-active" data-effect="breath">
+              <span class="effect-icon icon-breath"></span>
+              <strong>呼吸</strong><small>4 秒周期</small>
+            </button>
+            <button type="button" class="effect-card" data-effect="wave">
+              <span class="effect-icon icon-wave"></span>
+              <strong>波浪</strong><small>逐灯起伏</small>
+            </button>
+            <button type="button" class="effect-card" data-effect="chase">
+              <span class="effect-icon icon-chase"></span>
+              <strong>追逐</strong><small>单灯游走</small>
+            </button>
+            <button type="button" class="effect-card" data-effect="sparkle">
+              <span class="effect-icon icon-sparkle"></span>
+              <strong>星光</strong><small>柔和闪烁</small>
+            </button>
+          </div>
+        </div>
+
+        <div class="quick-actions">
+          <button type="button" class="btn btn-ghost" id="kwsButton">
+            <span class="btn-icon">⌁</span>恢复关键词待机
+          </button>
+          <button type="button" class="btn btn-danger-soft" id="offButton">
+            <span class="btn-icon">◌</span>全部关闭
+          </button>
+        </div>
+      </section>
+
+      <aside class="panel side-panel">
+        <div class="section-head compact">
+          <div>
+            <p class="eyebrow">CHANNEL MAP</p>
+            <h3>灯位选择</h3>
+          </div>
+          <button type="button" class="text-button" id="selectAll">全选</button>
+        </div>
+        <p class="side-note">点按灯位切换目标。青蓝色为已选，暖金色为当前亮度。</p>
+        <div id="channelGrid" class="channel-grid"></div>
+
+        <div class="health-card">
+          <div class="health-row"><span>SPI 链路</span><strong id="linkValue">—</strong></div>
+          <div class="health-row"><span>活动掩码</span><strong id="maskValue">—</strong></div>
+          <div class="health-row"><span>事件序号</span><strong id="eventValue">—</strong></div>
+          <div class="health-row"><span>固件直控</span><strong id="directValue">—</strong></div>
+          <div class="health-row"><span>故障位</span><strong id="faultValue">—</strong></div>
+        </div>
+
+        <details class="firmware-card">
+          <summary>固件预设特效 <span>可选</span></summary>
+          <p>使用 STM32 内置曲线，适合对照验证。切回“关键词待机”可继续语音业务。</p>
+          <div class="firmware-grid">
+            <button type="button" class="mini-btn" data-firmware="standby">待机</button>
+            <button type="button" class="mini-btn" data-firmware="gate">全亮</button>
+            <button type="button" class="mini-btn" data-firmware="release">渐弱</button>
+            <button type="button" class="mini-btn" data-firmware="egg">彩蛋</button>
+          </div>
+        </details>
+      </aside>
+    </div>
+
+    <div id="directNote" class="notice hidden">
+      <span class="notice-icon">!</span>
+      <span>当前 STM32 固件还没有直控亮度命令。网页会保留预览；烧录 web 固件后即可控制真实 0–100% 亮度。</span>
+    </div>
+
+    <footer class="footer">
+      <span>JLU Lamp Lab</span>
+      <span>PWM1–PWM13 · HEAT 锁定关闭</span>
+    </footer>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -10,6 +10,8 @@ extern "C" {
 #include <stdbool.h>
 #include <stdint.h>
 
+#define APP_PERF_LAMP_COUNT 13U
+
 typedef enum
 {
     PERF_ACTION_STANDBY = 0,
@@ -33,6 +35,9 @@ void app_perf_init(uint32_t now_ms);
 void app_perf_tick(uint32_t now_ms);
 bool app_perf_apply(uint32_t glyph_mask, perf_action_t action,
                     uint8_t profile_id, uint16_t value, uint32_t now_ms);
+void app_perf_set_lamps(const uint16_t duties[APP_PERF_LAMP_COUNT],
+                        uint32_t now_ms);
+bool app_perf_is_direct(void);
 void app_perf_all_off(void);
 uint32_t app_perf_active_mask(void);
 uint8_t app_perf_get_state(glyph_id_t glyph);

@@ -1,5 +1,28 @@
 # STM32 固件
 
+## Web 直控固件（新增）
+
+在测试扩展固件上增加：
+
+- `SET_LAMPS = 0x11`：13 个 u16 亮度值，直接设置 PWM1–PWM13；
+- CAPS feature bit 5 `DIRECT = 1`；
+- DIRECT 模式下 HEAT1/HEAT2 仍固定 0%；
+- PERFORM / ALL_OFF 会退出 DIRECT 模式。
+
+| 文件 | SHA256 |
+|---|---|
+| `PWM-Heater-web.hex` | `8c324998e8d87ecf908c7a549fa9396905e7d6a8415a44ff8be4f30ea80368c3` |
+| `PWM-Heater-web.bin` | `f5c5dfec91ca924a7b24d93aaa50c960ee8ecf7a35351cbace8bbe62a4378bae` |
+
+烧录：
+
+```sh
+st-flash --reset write stm32/firmware/PWM-Heater-web.bin 0x08000000
+```
+
+当前测试板尚未烧录该 web 固件；网页会显示 `direct_ready=false`，只提供预览。
+烧录后 CAPS features 应为 `0x2F`，网页直接亮度滑杆才会控制真实 PWM。
+
 ## 测试扩展固件（当前目录的 PWM-Heater.hex/bin）
 
 在 v1 基线上增加：

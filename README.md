@@ -224,6 +224,8 @@ st-flash --reset write stm32/firmware/PWM-Heater.bin 0x08000000
 - SPI v1 固定 64 字节帧、TLV、CRC16、会话/序号去重；
 - 500 ms 链路超时全关；
 - TEMP 接收和 STATUS 回显；
+- Python Web 控制台（80/8080）支持 13 路灯位预览、亮度、常亮/呼吸/波浪/追逐/星光；
+- Web 直控需要 `firmware/PWM-Heater-web.bin`（`SET_LAMPS`），HEAT1/HEAT2 固定 0%；
 - **v1 不做 PID，HEAT1/HEAT2 固定 0%**。
 
 ## 7. 已验证状态和限制

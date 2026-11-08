@@ -41,6 +41,8 @@ typedef struct
 } glyph_runtime_t;
 
 static glyph_runtime_t s_glyphs[GLYPH_COUNT];
+static bool s_direct_active;
+static uint16_t s_direct_duty[APP_PERF_LAMP_COUNT];
 
 static uint16_t breathing_duty(uint32_t elapsed_ms)
 {
@@ -221,6 +223,12 @@ void app_perf_init(uint32_t now_ms)
 {
     (void)now_ms;
 
+    s_direct_active = false;
+    for (uint32_t i = 0; i < APP_PERF_LAMP_COUNT; i++)
+    {
+        s_direct_duty[i] = 0U;
+    }
+
     for (uint32_t i = 0; i < (uint32_t)GLYPH_COUNT; i++)
     {
         s_glyphs[i].state = PERF_STATE_OFF;
@@ -236,6 +244,19 @@ void app_perf_init(uint32_t now_ms)
 void app_perf_tick(uint32_t now_ms)
 {
     uint16_t lamp_duty[(uint32_t)BOARD_PWM_PWM13 + 1U] = { 0U };
+
+    if (s_direct_active)
+    {
+        for (uint32_t pwm = (uint32_t)BOARD_PWM_PWM1;
+             pwm <= (uint32_t)BOARD_PWM_PWM13; pwm++)
+        {
+            board_pwm_set_duty((board_pwm_id_t)pwm,
+                               s_direct_duty[pwm]);
+        }
+        board_pwm_set_duty(BOARD_PWM_HEAT1, 0U);
+        board_pwm_set_duty(BOARD_PWM_HEAT2, 0U);
+        return;
+    }
 
     for (uint32_t i = 0; i < (uint32_t)GLYPH_COUNT; i++)
     {
@@ -288,6 +309,8 @@ bool app_perf_apply(uint32_t glyph_mask, perf_action_t action,
         return false;
     }
 
+    s_direct_active = false;
+
     for (uint32_t i = 0; i < (uint32_t)GLYPH_COUNT; i++)
     {
         if ((glyph_mask & GLYPH_BIT(i)) == 0U)
@@ -304,8 +327,42 @@ bool app_perf_apply(uint32_t glyph_mask, perf_action_t action,
     return applied;
 }
 
+void app_perf_set_lamps(const uint16_t duties[APP_PERF_LAMP_COUNT],
+                        uint32_t now_ms)
+{
+    (void)now_ms;
+
+    s_direct_active = true;
+    for (uint32_t i = 0; i < APP_PERF_LAMP_COUNT; i++)
+    {
+        uint16_t duty = duties[i];
+        if (duty > 1000U)
+        {
+            duty = 1000U;
+        }
+        s_direct_duty[i] = duty;
+    }
+
+    for (uint32_t i = 0; i < (uint32_t)GLYPH_COUNT; i++)
+    {
+        s_glyphs[i].state = PERF_STATE_OFF;
+        s_glyphs[i].duty_permille = 0U;
+    }
+}
+
+bool app_perf_is_direct(void)
+{
+    return s_direct_active;
+}
+
 void app_perf_all_off(void)
 {
+    s_direct_active = false;
+    for (uint32_t i = 0; i < APP_PERF_LAMP_COUNT; i++)
+    {
+        s_direct_duty[i] = 0U;
+    }
+
     for (uint32_t i = 0; i < (uint32_t)GLYPH_COUNT; i++)
     {
         s_glyphs[i].state = PERF_STATE_OFF;
