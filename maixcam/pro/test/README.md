@@ -146,6 +146,30 @@ PERFORM RELEASE mask=0x4
 glyphs=(0, 0, 4) -> glyphs=(0, 0, 1)
 ```
 
+### 4.2 USB 麦克风检查
+
+USB 麦克风当前为 ALSA card 2：
+
+```sh
+arecord -l
+arecord -D plughw:2,0 -f S16_LE -r 16000 -c 1 -d 5 /tmp/mic.wav
+amixer -c 2 sget "Mic"
+```
+
+`config.json` 中的 `mic_gain` / `mic_agc` 会在 KWS 启动前设置增益和 AGC。
+可用 `--debug-kws` 打印每一帧的关键词概率：
+
+```sh
+python3 -u main.py --no-spi --debug-kws
+```
+
+注意：
+
+- 模型是中文拼音 KWS，关键词为 `ha1 lou2` / `wei1 er2 kang1`；
+- 请说中文“哈喽”，不要读英文 `hello`；
+- 只有在模式为 `KWS 待机` 时关键词才驱动 GATE/RELEASE；网页手动灯效模式会暂停关键词动作；
+- 如果概率一直为 `0.000`，先用 `wav/hallo_zh_16k_pad.wav` 验证模型，再检查麦克风距离、增益和发音。
+
 `GATE` 的 100% 只是关键词后的短暂表演，不是默认占空比。
 `tools/hold_all_lamps.py` 仅用于电气测试强制 100%，不要作为正常业务运行。
 

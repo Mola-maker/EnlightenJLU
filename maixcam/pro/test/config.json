@@ -29,5 +29,7 @@
   ],
   "spi_retries": 5,
   "spi_retry_delay_ms": 100,
-  "spi4_settle_ms": 500
+  "spi4_settle_ms": 500,
+  "mic_gain": 8,
+  "mic_agc": true
 }

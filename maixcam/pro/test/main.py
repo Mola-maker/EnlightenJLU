@@ -16,7 +16,9 @@ import argparse
 import json
 import logging
 import os
+import re
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -40,6 +42,33 @@ log = logging.getLogger("JLU_LEDLAB.test")
 def load_config(path):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def configure_mic_gain(cfg):
+    """Apply the USB microphone capture gain before opening ALSA.
+
+    The PCM2902 exposes a 0..16 capture volume; leaving it at 0 can make
+    live KWS unreliable.  Failures are non-fatal so WAV-only tests still run.
+    """
+    device = str(cfg.get("alsa_device", ""))
+    match = re.search(r"(?:plughw|hw):(\d+)", device)
+    if not match:
+        return
+    card = match.group(1)
+    gain = cfg.get("mic_gain")
+    if gain is not None:
+        result = subprocess.run(
+            ["amixer", "-c", card, "sset", "Mic", str(int(gain))],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if result.returncode != 0:
+            log.warning("failed to set USB mic gain on card %s", card)
+        else:
+            log.info("USB mic card %s capture gain=%s", card, gain)
+    if "mic_agc" in cfg:
+        value = "on" if cfg["mic_agc"] else "off"
+        subprocess.run(
+            ["amixer", "-c", card, "sset", "Auto Gain Control", value],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 class TempWorker(threading.Thread):
@@ -106,9 +135,10 @@ class SpiWorker(threading.Thread):
 
 
 class KeywordEngine:
-    def __init__(self, cfg, link):
+    def __init__(self, cfg, link, debug_scores=False):
         self.cfg = cfg
         self.link = link
+        self.debug_scores = debug_scores
         self.stop = threading.Event()
         self.release_timer = None
         self.release_lock = threading.Lock()
@@ -148,11 +178,17 @@ class KeywordEngine:
             log.info("PERFORM RELEASE all-lamps event=%d", seq)
 
     def _callback(self, data, length):
+        probs = []
         for i in range(min(length, len(self.keywords))):
             try:
-                prob = float(data[i])
+                probs.append(float(data[i]))
             except (TypeError, ValueError):
-                continue
+                probs.append(0.0)
+        if self.debug_scores and probs:
+            log.info("KWS scores %s",
+                     " ".join(f"{self.labels[i]}={p:.3f}"
+                              for i, p in enumerate(probs)))
+        for i, prob in enumerate(probs):
             if prob >= self.thresholds[i]:
                 self.on_trigger(i, prob)
 
@@ -189,10 +225,13 @@ def main():
     p.add_argument("--config", default=os.path.join(TEST_DIR, "config.json"))
     p.add_argument("--wav", default=None)
     p.add_argument("--no-spi", action="store_true")
+    p.add_argument("--debug-kws", action="store_true",
+                   help="log every keyword probability frame")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     cfg = load_config(args.config)
+    configure_mic_gain(cfg)
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
@@ -222,7 +261,7 @@ def main():
 
     link = None
     spi_worker = temp_worker = None
-    engine = KeywordEngine(cfg, None)
+    engine = KeywordEngine(cfg, None, debug_scores=args.debug_kws)
     try:
         # Load KWS and configure USB audio before opening the bit-banged
         # SPI4 device.  KWS/audio initialization can disturb the GPIO
