@@ -20,7 +20,10 @@ import time
 from pathlib import Path
 
 TEST_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(TEST_DIR))
+APP_DIR = TEST_DIR.parent / "app"
+for _path in (TEST_DIR, APP_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 import stm32_protocol as p  # noqa: E402
 from spi4_bootstrap import (  # noqa: E402
@@ -29,6 +32,11 @@ from spi4_bootstrap import (  # noqa: E402
 )
 from spi_link import Stm32SpiLink, SpiTransactionError  # noqa: E402
 from web_control import LampController, create_app  # noqa: E402
+
+try:
+    from sg2002_temp import sample as read_temperature  # noqa: E402
+except Exception:  # pragma: no cover - optional on a bare host
+    read_temperature = None
 
 TRIGGER_RE = re.compile(r"GATE mask=0x([0-9A-Fa-f]+)")
 WEB_DIR = TEST_DIR / "web"
@@ -70,9 +78,11 @@ def main():
     parser = argparse.ArgumentParser(description="STM32 13-lamp SPI service")
     parser.add_argument("--hold", type=float, default=1.2)
     parser.add_argument("--mask", type=lambda x: int(x, 0), default=4)
-    parser.add_argument("--frequency", type=int, default=500_000)
+    parser.add_argument("--frequency", type=int, default=100_000)
     parser.add_argument("--web-port", type=int, default=80)
     parser.add_argument("--no-web", action="store_true")
+    parser.add_argument("--temperature-source", choices=("auto", "sysfs", "reg"),
+                        default="auto")
     args = parser.parse_args()
 
     ensure_spi4_device()
@@ -98,6 +108,8 @@ def main():
     stdin_fd = sys.stdin.fileno()
     buffered = b""
     last_log = 0.0
+    last_temp = 0.0
+    temp_seq = 0
 
     try:
         deadline = time.monotonic() + 10.0
@@ -137,6 +149,19 @@ def main():
                         if match:
                             controller.on_kws_trigger()
                             print("KWS TRIGGER", flush=True)
+
+            now = time.monotonic()
+            if read_temperature is not None and now - last_temp >= 1.0:
+                last_temp = now
+                try:
+                    item = read_temperature(args.temperature_source)
+                    temp_seq = (temp_seq + 1) & 0xFFFF
+                    link.set_temp(
+                        item["temp_mc"], temp_seq, 0, True,
+                        0 if item.get("source") == "sysfs" else 1)
+                except Exception as exc:  # noqa: BLE001
+                    if now - last_temp < 2.1:
+                        print(f"temperature failed: {exc}", flush=True)
 
             try:
                 status = link.transaction()

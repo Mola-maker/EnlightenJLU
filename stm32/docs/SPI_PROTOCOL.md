@@ -13,8 +13,8 @@
 | SPI 模式 | Mode 0（CPOL=0, CPHA=0） |
 | 数据位 | 8 bit |
 | 位序 | MSB first |
-| 片选 | 低有效，硬件 NSS |
-| 建议时钟 | MaixCAM Pro 软件 SPI4：500 kHz，已验证上限约 1.25 MHz |
+| 片选 | 逻辑低有效；STM32 Web 固件改为软件 NSS（SSM=1, SSI=0），单从机时外部 CS 可保留但不依赖 |
+| 建议时钟 | MaixCAM Pro 软件 SPI4：100 kHz 最稳；200 kHz 可能偶发半帧 |
 | 电平 | 双方 3.3 V |
 | 连接 | SCK/MISO/MOSI/CS + 共地 |
 
@@ -48,8 +48,10 @@ echo spi4@gpio > /sys/bus/platform/drivers/spi_gpio/bind
 
 软件 SPI4 在系统负载下可能返回坏帧，主机必须按 magic/CRC 校验并重试。常见
 坏帧 `5A 5A A5 ...` 是首字节偏移：可丢弃首字节、在末尾补 `0x00`，重新校验
-CRC 后接受；校验失败的帧必须整帧重发。真实建议为 500 kHz、20 Hz 心跳，
-失败重试 5 次，间隔 100 ms。
+CRC 后接受；校验失败的帧必须整帧重发。2026-11-08 整机实测 **100 kHz**
+（64 字节、20 Hz 心跳、5 次重试）最稳；200 kHz 会偶发 MISO 半帧，500 kHz
+不建议用于生产。STM32 侧使用软件 NSS 后，不再因为 A24/PA4 接触抖动而整帧
+超时；外部 CS 仍建议接好，便于逻辑分析仪观察。
 
 ## 2. 帧格式
 

@@ -77,13 +77,18 @@ echo spi4@gpio > /sys/bus/platform/drivers/spi_gpio/bind
 `spi4` 的 spidev 驱动会拒绝显式写 `spi.mode = 0`，并固定报告 CS_HIGH 标志；
 因此程序只设置 `bits_per_word=8` 和 `max_speed_hz`，保持驱动默认 mode。
 
-SPI 模式 0、8 bit，默认 500 kHz。打开设备后等待 0.5 s，让软件 SPI4
-稳定；每个响应都会校验 magic、长度和 CRC，失败时最多重试 5 次，间隔
-100 ms。
+SPI 模式 0、8 bit，生产配置使用 **100 kHz**。200 kHz 在整机负载下会偶发
+半帧；500 kHz 不建议使用。打开设备后等待 0.5 s，让软件 SPI4 稳定；每个
+响应都会校验 magic、长度和 CRC，失败时最多重试 5 次，间隔 100 ms。
 
 软件 SPI4 偶尔会在帧头前多送一个字节并丢掉末尾的保留 0，传输层会在
 CRC 校验通过时自动去掉首字节并补零恢复。连续坏帧最终由 20 Hz 心跳和
-HELLO 重建处理。ST-Link 不在本测试链路上；它只用于烧录 STM32。
+HELLO 重建处理。
+
+2026-11-08 的 Web 固件把 STM32 SPI1 改为 **软件 NSS**（`SSM=1, SSI=0`）。
+总线上只有 STM32 一个从机时，即使 A24→PA4 的 CS 线松动，STM32 仍能完成
+64 字节事务；A24/PA4 仍建议保留，方便示波器/逻辑分析仪观察。
+ST-Link 不在本测试链路上；它只用于烧录 STM32。
 
 ## 4. 运行
 
@@ -106,7 +111,7 @@ GATE/HOLD，再执行 RELEASE，最后回到待机呼吸。
 cd /root/surplife/test
 nohup sh -c 'python3 -u main.py --no-spi 2>&1 |
   tee /root/surplife/run/kws_live.log |
-  python3 -u tools/spi_service.py --hold 1.2 --frequency 500000 --web-port 80' \
+  python3 -u tools/spi_service.py --hold 1.2 --frequency 100000 --web-port 80' \
   </dev/null >/root/surplife/run/spi_live.log 2>&1 &
 ```
 
@@ -121,11 +126,18 @@ http://192.168.43.229/
 适配手机端。亮度滑杆需要先烧录 `PWM-Heater-web.bin`；未烧录时页面会显示
 “待升级”，只更新浏览器预览，不覆盖 STM32 的待机呼吸。
 
+设备已安装 `/etc/init.d/S99surplife`，开机自动切换 USB host、等待 USB
+麦克风，然后启动 KWS + Web + SPI 服务；没有麦克风时退化为 Web-only。
+手动重启：
+
+```sh
+/etc/init.d/S99surplife restart
+```
+
 停止时先停 SPI 服务，让它发送 `ALL_OFF`：
 
 ```sh
-pkill -TERM -f 'tools/spi_service.py'
-pkill -TERM -f 'main.py --no-spi'
+/etc/init.d/S99surplife stop
 ```
 
 正常待机状态应看到：
@@ -145,6 +157,39 @@ GATE ACK active=0x4 glyphs=(0, 0, 2)
 PERFORM RELEASE mask=0x4
 glyphs=(0, 0, 4) -> glyphs=(0, 0, 1)
 ```
+
+### 4.1.1 开机自动启动与黑屏恢复
+
+设备上已安装 `/etc/init.d/S99surplife`：开机后切换 USB-C 到 host、等待
+USB 麦克风（card 2），然后启动 KWS + `spi_service.py`；没有麦克风时退化为
+Web-only，HTTP 仍可用。启动日志：
+
+```text
+/root/surplife/run/web_service.log
+/root/surplife/run/kws_web.log
+```
+
+手动：`/etc/init.d/S99surplife start|stop|restart`。仓库内的安装副本为
+`tools/S99surplife`：
+
+```sh
+scp tools/S99surplife root@192.168.43.229:/etc/init.d/S99surplife
+ssh root@192.168.43.229 'chmod 755 /etc/init.d/S99surplife'
+```
+
+**不要**把 init 脚本备份命名成 `/etc/init.d/S06maixapp.bak` 等。Buildroot 的
+`/etc/init.d/rcS` 使用 `for i in /etc/init.d/S??*`，任何 `S` + 两位数字开头
+的备份文件都会被当成启动脚本执行。之前多个 `S06maixapp.*.bak` 导致多个
+`launcher_daemon`/`launcher` 同时打开 `/dev/cvi-vpss`、`/dev/cvi-vo`，表现为
+设置、相机、应用商店打开后只有背光/黑屏。备份统一放到：
+
+```text
+/root/surplife/init_backups/
+```
+
+同理，`S30wifi.disabled` 也会被 `S??*` 匹配；禁用脚本必须移出
+`/etc/init.d`。正常启动应只有一个 `launcher_daemon` 和一个 `launcher`，
+且 `/dev/input/event1` 为 `hyn_ts`，无需在启动时重绑触摸。
 
 ### 4.2 USB 麦克风检查
 
@@ -217,7 +262,7 @@ PWM-Heater-test.bin
 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 
 PWM-Heater-web.bin
-f5c5dfec91ca924a7b24d93aaa50c960ee8ecf7a35351cbace8bbe62a4378bae
+b1d268529084ee431a35fbf1d862a7741d3fca3801f88621c1f97d6805e0be91
 ```
 
 烧录命令（在 ST-Link 所在主机上执行）：

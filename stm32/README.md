@@ -7,6 +7,7 @@ STM32 不跑语音模型；它接收 MaixCAM 的 `PERFORM` 事件，执行 15 �
 ## 硬件接口
 
 - SPI1 从机：Mode 0，PA4/PA5/PA6/PA7，固定 64 字节帧；
+  单从机固件使用软件 NSS（`SSM=1, SSI=0`），外部 CS 可保留但不再依赖；
 - USART3：PB10/PB11，115200 8N1，仅本地调试；
 - TIM1/TIM2/TIM3：2 kHz，PWM1–PWM10、PWM12、PWM13；
 - TIM4：20 kHz，PWM11、HEAT1、HEAT2；
@@ -122,3 +123,22 @@ SRAM 20 KiB，st-link 报告 Flash 128 KiB；写入 16,784 B 到 `0x08000000`，
 `st-flash 1.8.0` 返回 `Flash written and verified!`，随后通过 AIRCR 软件复位。
 本次未重新读取 TIM 寄存器；MaixCAM Pro 尚未接入，SPI、13 路灯牌动作和
 USART3 `[temp]` 输出仍需整机联调。
+
+### 2026-11-08 Web 直控固件
+
+```text
+firmware/PWM-Heater-web.bin
+SHA256 b1d268529084ee431a35fbf1d862a7741d3fca3801f88621c1f97d6805e0be91
+```
+
+已通过 ST-Link V2 + `st-flash 1.8.0` 烧录并校验（17,312 B）。该版本增加：
+
+- `SET_LAMPS=0x11`，13 路独立 0–1000 亮度；
+- `FEATURE_DIRECT`，MaixCAM Web UI 的亮度滑杆直接控制真实 PWM；
+- 软件 NSS 和 SPI 诊断打印；
+- HEAT1/HEAT2 在 DIRECT 模式仍强制 0%。
+
+整机验证使用 MaixCAM Pro `/dev/spidev4.0`、**100 kHz**、DMA 关断的
+`tools/spi_service.py`；KWS 独立进程，触发后通过 GATE/RELEASE 控制
+PWM1–PWM13。网页 `fault_flags=0`、`direct_ready=true`，`last_control_seq`
+随命令递增，说明 STM32 已实际接收控制帧。

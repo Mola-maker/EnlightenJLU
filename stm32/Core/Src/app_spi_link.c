@@ -225,7 +225,8 @@ static void handle_hello(const uint8_t *value, uint8_t length)
     s_session_active = true;
     s_need_hello = false;
     s_link_state = APP_SPI_LINK_ACTIVE;
-    s_faults &= (uint16_t)~(FAULT_NEED_HELLO | FAULT_LINK_LOST |
+    s_faults &= (uint16_t)~(FAULT_SPI | FAULT_CRC | FAULT_FORMAT |
+                            FAULT_NEED_HELLO | FAULT_LINK_LOST |
                             FAULT_PROTOCOL);
     app_perf_all_off();
 
@@ -444,6 +445,10 @@ static void process_control_frame(const uint8_t *frame, uint32_t now_ms)
         return;
     }
 
+    /* A valid frame proves the bus is healthy again; clear transient
+       transport faults from the previous timeout/corrupt frame. */
+    s_faults &= (uint16_t)~(FAULT_SPI | FAULT_CRC | FAULT_FORMAT);
+
     uint32_t seq = rd32(&frame[4]);
     uint32_t session_id = rd32(&frame[8]);
 
@@ -549,6 +554,9 @@ static void arm_spi(void)
     {
         s_spi_armed = false;
         s_faults |= FAULT_SPI;
+        app_debug_printf("[spi] arm failed state=%u err=0x%lX\r\n",
+                         (unsigned int)hspi1.State,
+                         (unsigned long)hspi1.ErrorCode);
     }
 }
 
@@ -556,9 +564,17 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 {
     if (hspi->Instance == SPI1)
     {
+        static bool first_rx_logged;
         memcpy(s_pending_rx, s_rx_frame, APP_SPI_FRAME_SIZE);
         s_spi_armed = false;
         s_frame_pending = true;
+        if (!first_rx_logged)
+        {
+            first_rx_logged = true;
+            app_debug_printf("[spi] first rx %02X %02X %02X %02X\r\n",
+                             s_rx_frame[0], s_rx_frame[1],
+                             s_rx_frame[2], s_rx_frame[3]);
+        }
     }
 }
 
@@ -568,6 +584,9 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
     {
         s_spi_armed = false;
         s_faults |= FAULT_SPI;
+        app_debug_printf("[spi] spi error=0x%lX sr=0x%04X\r\n",
+                         (unsigned long)hspi->ErrorCode,
+                         (unsigned int)hspi->Instance->SR);
     }
 }
 
@@ -606,6 +625,11 @@ void app_spi_link_init(uint32_t now_ms)
     cs_pin.Pull = GPIO_PULLUP;
     HAL_GPIO_Init(GPIOA, &cs_pin);
 
+    /* Single slave on the bus: keep SPI selected internally.  This also
+       makes the link work when the external CS wire is missing or noisy. */
+    SET_BIT(hspi1.Instance->CR1, SPI_CR1_SSM);
+    CLEAR_BIT(hspi1.Instance->CR1, SPI_CR1_SSI);
+
     HAL_NVIC_SetPriority(SPI1_IRQn, 1U, 0U);
     HAL_NVIC_EnableIRQ(SPI1_IRQn);
 
@@ -640,7 +664,16 @@ void app_spi_link_poll(uint32_t now_ms)
         (void)HAL_SPI_Abort(&hspi1);
         s_spi_armed = false;
         s_faults |= FAULT_SPI;
-        app_debug_printf("[spi] transaction timeout, rearming\r\n");
+        app_debug_printf(
+            "[spi] timeout state=%u err=0x%lX sr=0x%04X cr1=0x%04X "
+            "cr2=0x%04X idr=0x%04X rx=%02X %02X %02X %02X\r\n",
+            (unsigned int)hspi1.State,
+            (unsigned long)hspi1.ErrorCode,
+            (unsigned int)hspi1.Instance->SR,
+            (unsigned int)hspi1.Instance->CR1,
+            (unsigned int)hspi1.Instance->CR2,
+            (unsigned int)GPIOA->IDR,
+            s_rx_frame[0], s_rx_frame[1], s_rx_frame[2], s_rx_frame[3]);
     }
 
     if (s_rx_seen &&

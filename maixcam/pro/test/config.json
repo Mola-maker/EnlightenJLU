@@ -3,7 +3,7 @@
   "alsa_device": "plughw:2,0",
   "spi_bus": 4,
   "spi_device": 0,
-  "spi_frequency": 500000,
+  "spi_frequency": 100000,
   "all_lamps_mask": 4,
   "hold_seconds": 1.2,
   "standby_on_start": true,

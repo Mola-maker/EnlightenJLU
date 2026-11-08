@@ -26,7 +26,7 @@ class SpiTransactionError(RuntimeError):
 
 
 class Stm32SpiLink:
-    def __init__(self, bus=4, device=0, frequency=500_000,
+    def __init__(self, bus=4, device=0, frequency=100_000,
                  session_id=None, retries=5, retry_delay=0.1,
                  settle_time=0.5):
         self.bus = int(bus)

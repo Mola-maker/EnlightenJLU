@@ -1,0 +1,82 @@
+#!/bin/sh
+# Start the 13-lamp Web UI + optional USB-mic KWS after the launcher.
+# The SPI4 bit-banged bus is owned only by tools/spi_service.py; KWS runs
+# in a separate process and feeds TRIGGER lines into that service.
+set -u
+
+RUN=/root/surplife/run
+TEST=/root/surplife/test
+PIDFILE=$RUN/autostart.pid
+mkdir -p "$RUN"
+
+have_usb_mic() {
+    arecord -l 2>/dev/null | grep -q "USB Audio"
+}
+
+start() {
+    if [ -f "$PIDFILE" ]; then
+        old=$(cat "$PIDFILE" 2>/dev/null || true)
+        if [ -n "${old:-}" ] && kill -0 "$old" 2>/dev/null; then
+            echo "surplife already running (pid $old)"
+            return 0
+        fi
+    fi
+
+    # The USB-C port defaults to device mode after every boot.  A powered
+    # hub + USB microphone needs host mode.  This does not affect WiFi.
+    /root/surplife/usb_mic_mode.sh host >/dev/null 2>&1 &
+
+    # Give the hub/mic time to enumerate; don't block boot forever when
+    # no microphone is attached.
+    i=0
+    while [ "$i" -lt 15 ]; do
+        have_usb_mic && break
+        i=$((i + 1))
+        sleep 1
+    done
+
+    cd "$TEST" || return 1
+
+    if have_usb_mic; then
+        nohup sh -c 'while true; do
+            python3 -u main.py --no-spi 2>&1 |
+            tee /root/surplife/run/kws_web.log |
+            python3 -u tools/spi_service.py --hold 1.2 --web-port 80 --frequency 100000
+            sleep 2
+        done' </dev/null >"$RUN/web_service.log" 2>&1 &
+    else
+        nohup sh -c 'while true; do
+            tail -f /dev/null |
+            python3 -u tools/spi_service.py --hold 1.2 --web-port 80 --frequency 100000
+            sleep 2
+        done' </dev/null >"$RUN/web_service.log" 2>&1 &
+    fi
+    echo $! > "$PIDFILE"
+    if have_usb_mic; then
+        echo "surplife started pid $(cat "$PIDFILE") (usb_mic=yes)"
+    else
+        echo "surplife started pid $(cat "$PIDFILE") (usb_mic=no, web-only)"
+    fi
+}
+
+stop() {
+    if [ -f "$PIDFILE" ]; then
+        old=$(cat "$PIDFILE" 2>/dev/null || true)
+        [ -n "${old:-}" ] && kill "$old" 2>/dev/null || true
+        rm -f "$PIDFILE"
+    fi
+    # Best-effort cleanup of the two worker processes.  The only Python
+    # processes on this device are the KWS and SPI services.
+    ps -o pid,comm 2>/dev/null |
+        awk '$2 == "python3" {print $1}' |
+        while read -r p; do
+            kill -9 "$p" 2>/dev/null || true
+        done
+}
+
+case "${1:-start}" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop; sleep 1; start ;;
+    *) echo "Usage: $0 start|stop|restart"; exit 2 ;;
+esac

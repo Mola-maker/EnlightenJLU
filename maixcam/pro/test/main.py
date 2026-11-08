@@ -238,7 +238,7 @@ def main():
 
     def open_spi_link():
         bus = int(cfg.get("spi_bus", 4))
-        frequency = int(cfg.get("spi_frequency", 500_000))
+        frequency = int(cfg.get("spi_frequency", 100_000))
         retries = int(cfg.get("spi_retries", 5))
         retry_delay = max(
             0.0, float(cfg.get("spi_retry_delay_ms", 100)) / 1000.0)

@@ -39,7 +39,7 @@ def main() -> int:
     link = Stm32SpiLink(
         bus=4,
         device=0,
-        frequency=500_000,
+        frequency=100_000,
         retries=5,
         retry_delay=0.1,
         settle_time=0.5,

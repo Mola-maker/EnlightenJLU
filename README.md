@@ -254,16 +254,30 @@ SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 ```
 
 该固件包含 `GLYPH_ALL_LAMPS`（PWM1–PWM13，排除 HEAT1/2）、USART3 `[temp]`
-打印，以及按最大占空比聚合灯牌输出的修正。MaixCAM Pro 尚未接回，SPI、13 路灯牌
-动作和温度打印仍需整机联调。
+打印，以及按最大占空比聚合灯牌输出的修正。
+
+2026-11-08 已完成 MaixCAM Pro 整机联调：
+
+- Web 固件 `PWM-Heater-web.bin` 已烧录并校验，SHA256
+  `b1d268529084ee431a35fbf1d862a7741d3fca3801f88621c1f97d6805e0be91`；
+- `direct_ready=true`，13 路 0–100% 亮度直控可用，HEAT 仍为 0；
+- 软件 SPI4 采用 **100 kHz**；STM32 改为软件 NSS（单从机），解决外部 CS
+  接触/片选导致的整帧超时；
+- KWS 使用 USB 麦克风 card 2，10 cm / 30 cm「哈喽」可触发，
+  触发后 `active_mask=0x4`、PWM1–PWM13 执行 GATE/RELEASE；
+- `/etc/init.d/S99surplife` 开机自动切换 USB host、启动 KWS + Web 服务；
+- 应用黑屏根因是 `rcS` 的 `S??*` 通配符把 `S06maixapp.*.bak` 当成启动脚本，
+  多个 launcher 同时抢占 `/dev/cvi-vo`；备份已移到 `/root/surplife/init_backups`。
 
 已知限制：
 
-- SPI 时序和完整 15 路灯牌尚未系统级联调；
+- 13 路灯牌的实际光输出尚未现场确认（SPI 控制链和 PWM 命令已验证）；
 - ST-Link NRST 尚未接，建议后续调试补上；
 - 保温板 PID、温度闭环、过流/过温保护尚未实现；
 - 一代 Pro 权重只存在设备上；
 - 语音业务和麦克风 UI 不能同时占用 USB 麦克风；
+- 1 m 远场「哈喽」当前概率约 0.03，低于 0.12 阈值；10/30 cm 稳定；
+- 网页显示 `faults` 偶发瞬时 `0x4`，下一次合法帧清除；
 - 不提交密钥、密码、个人语音录音或 token。
 
 ## 8. 旧代码清理说明

@@ -51,7 +51,7 @@ def main():
     parser.add_argument("bus", nargs="?", type=int, default=4,
                         help="spidev bus (default: 4 for software SPI4)")
     parser.add_argument("device", nargs="?", type=int, default=0)
-    parser.add_argument("--frequency", type=int, default=500_000)
+    parser.add_argument("--frequency", type=int, default=100_000)
     parser.add_argument("--attempts", type=int, default=10)
     parser.add_argument("--settle", type=float, default=0.5,
                         help="seconds to wait after opening software SPI4")
