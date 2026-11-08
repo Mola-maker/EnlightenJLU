@@ -188,8 +188,11 @@ ssh root@192.168.43.229 'chmod 755 /etc/init.d/S99surplife'
 ```
 
 同理，`S30wifi.disabled` 也会被 `S??*` 匹配；禁用脚本必须移出
-`/etc/init.d`。正常启动应只有一个 `launcher_daemon` 和一个 `launcher`，
-且 `/dev/input/event1` 为 `hyn_ts`，无需在启动时重绑触摸。
+`/etc/init.d`。正常启动应只有一个 `launcher_daemon` 和一个 `launcher`。
+未接 USB 麦克风时 `/dev/input/event1` 通常是 `hyn_ts`；接上 USB 麦克风后
+其 HID 可能占用 event1，`hyn_ts` 变为 event2。MaixPy 的
+`maix.touchscreen.TouchScreen()` 会自动扫描并找到 event2，不要为了 event
+编号在启动时重绑触摸。
 
 ### 4.2 USB 麦克风检查
 

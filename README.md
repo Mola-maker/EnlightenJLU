@@ -266,6 +266,8 @@ SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 - KWS 使用 USB 麦克风 card 2，10 cm / 30 cm「哈喽」可触发，
   触发后 `active_mask=0x4`、PWM1–PWM13 执行 GATE/RELEASE；
 - `/etc/init.d/S99surplife` 开机自动切换 USB host、启动 KWS + Web 服务；
+- `tools/spi_service.py` 以 1 Hz 读取 SG2002 结温并发送 TEMP TLV，
+  STATUS 回传 `temp_mc`（约 49 °C，`temp_valid=true`），USART3 可观察；
 - 应用黑屏根因是 `rcS` 的 `S??*` 通配符把 `S06maixapp.*.bak` 当成启动脚本，
   多个 launcher 同时抢占 `/dev/cvi-vo`；备份已移到 `/root/surplife/init_backups`。
 
