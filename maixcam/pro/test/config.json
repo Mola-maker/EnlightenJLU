@@ -16,20 +16,20 @@
       "label": "hello",
       "display": "hello（哈喽）",
       "kws": "ha1 lou2",
-      "threshold": 0.2,
+      "threshold": 0.12,
       "cooldown": 2.0
     },
     {
       "label": "welcome",
       "display": "welcome（威尔康）",
       "kws": "wei1 er2 kang1",
-      "threshold": 0.1,
+      "threshold": 0.06,
       "cooldown": 2.0
     }
   ],
   "spi_retries": 5,
   "spi_retry_delay_ms": 100,
   "spi4_settle_ms": 500,
-  "mic_gain": 8,
+  "mic_gain": 16,
   "mic_agc": true
 }
