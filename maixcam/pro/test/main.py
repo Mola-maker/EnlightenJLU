@@ -88,6 +88,10 @@ class SpiWorker(threading.Thread):
                              "ACTIVE" if active else "not active",
                              status.link_state, status.fault_flags)
                     self.was_active = active
+                if not active:
+                    # The STM32 has forced all outputs off and requires a
+                    # fresh HELLO.  Re-arm standby after the link recovers.
+                    self.standby_sent = False
                 if active and not self.standby_sent:
                     self.standby_sent = True
                     if self.cfg.get("standby_on_start", False):
@@ -193,8 +197,7 @@ def main():
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
 
-    link = None
-    if not args.no_spi:
+    def open_spi_link():
         bus = int(cfg.get("spi_bus", 4))
         frequency = int(cfg.get("spi_frequency", 500_000))
         retries = int(cfg.get("spi_retries", 5))
@@ -202,36 +205,42 @@ def main():
             0.0, float(cfg.get("spi_retry_delay_ms", 100)) / 1000.0)
         settle_time = max(
             0.0, float(cfg.get("spi4_settle_ms", 500)) / 1000.0)
-        try:
-            if bus == 4:
-                ensure_spi4_device()
-                configure_spi4_pins()
-            link = Stm32SpiLink(
-                bus=bus,
-                device=int(cfg.get("spi_device", 0)),
-                frequency=frequency,
-                retries=retries,
-                retry_delay=retry_delay,
-                settle_time=settle_time)
-            log.info("SPI /dev/spidev%d.%d @ %d Hz, retries=%d/%dms",
-                     bus, int(cfg.get("spi_device", 0)),
-                     frequency, retries,
-                     int(retry_delay * 1000))
-        except Exception as exc:  # noqa: BLE001
-            log.error("SPI open failed: %s", exc)
+        if bus == 4:
+            ensure_spi4_device()
+            configure_spi4_pins()
+        link = Stm32SpiLink(
+            bus=bus,
+            device=int(cfg.get("spi_device", 0)),
+            frequency=frequency,
+            retries=retries,
+            retry_delay=retry_delay,
+            settle_time=settle_time)
+        log.info("SPI /dev/spidev%d.%d @ %d Hz, retries=%d/%dms",
+                 bus, int(cfg.get("spi_device", 0)),
+                 frequency, retries, int(retry_delay * 1000))
+        return link
 
+    link = None
     spi_worker = temp_worker = None
-    if link is not None:
-        spi_worker = SpiWorker(link, cfg, stop)
-        temp_worker = TempWorker(link, cfg, stop)
-        spi_worker.start()
-        temp_worker.start()
-    else:
-        log.warning("SPI disabled; keyword events are log-only")
-
-    engine = KeywordEngine(cfg, link)
+    engine = KeywordEngine(cfg, None)
     try:
+        # Load KWS and configure USB audio before opening the bit-banged
+        # SPI4 device.  KWS/audio initialization can disturb the GPIO
+        # state if the spidev fd is already open.
         engine.start(args.wav)
+        if not args.no_spi:
+            try:
+                link = open_spi_link()
+            except Exception as exc:  # noqa: BLE001
+                log.error("SPI open failed: %s", exc)
+        engine.link = link
+        if link is not None:
+            spi_worker = SpiWorker(link, cfg, stop)
+            temp_worker = TempWorker(link, cfg, stop)
+            spi_worker.start()
+            temp_worker.start()
+        else:
+            log.warning("SPI disabled; keyword events are log-only")
         while not stop.is_set() and not app.need_exit():
             n = engine.speech.run(1)
             if n < 1:

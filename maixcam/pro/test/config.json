@@ -1,12 +1,12 @@
 {
   "model": "/root/models/am_3332_192_int8.mud",
-  "alsa_device": "surplife_mic",
+  "alsa_device": "plughw:2,0",
   "spi_bus": 4,
   "spi_device": 0,
   "spi_frequency": 500000,
   "all_lamps_mask": 4,
   "hold_seconds": 1.2,
-  "standby_on_start": false,
+  "standby_on_start": true,
   "temperature": {
     "interval_seconds": 1.0,
     "source": "sysfs"

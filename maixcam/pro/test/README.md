@@ -94,6 +94,50 @@ cd /root/surplife/test
 ./run_test.sh
 ```
 
+### 4.1 正常业务：待机呼吸 + 关键词表演
+
+软件 SPI4 是内核 bit-bang，KWS 模型加载和推理会明显干扰它的时序。
+因此正常业务推荐把 **KWS 进程** 和 **SPI 进程** 分开：KWS 用
+`--no-spi` 只输出关键词日志，`tools/spi_service.py` 独占 SPI4，默认让
+PWM1–PWM13 处于 1%–8% 的 4 秒待机呼吸；检测到关键词后执行 1.2 秒
+GATE/HOLD，再执行 RELEASE，最后回到待机呼吸。
+
+```sh
+cd /root/surplife/test
+nohup sh -c 'python3 -u main.py --no-spi 2>&1 |
+  tee /root/surplife/run/kws_live.log |
+  python3 -u tools/spi_service.py --hold 1.2 --frequency 500000' \
+  </dev/null >/root/surplife/run/spi_live.log 2>&1 &
+```
+
+停止时先停 SPI 服务，让它发送 `ALL_OFF`：
+
+```sh
+pkill -TERM -f 'tools/spi_service.py'
+pkill -TERM -f 'main.py --no-spi'
+```
+
+正常待机状态应看到：
+
+```text
+link=2 active=0x0 glyphs=(0, 0, 1)
+```
+
+`active_mask=0` 是正常的，因为 STANDBY 不计入 active mask；第三个
+glyph 状态 `1` 就是待机呼吸。
+
+关键词触发时应看到：
+
+```text
+TRIGGER -> GATE mask=0x4 event=...
+GATE ACK active=0x4 glyphs=(0, 0, 2)
+PERFORM RELEASE mask=0x4
+glyphs=(0, 0, 4) -> glyphs=(0, 0, 1)
+```
+
+`GATE` 的 100% 只是关键词后的短暂表演，不是默认占空比。
+`tools/hold_all_lamps.py` 仅用于电气测试强制 100%，不要作为正常业务运行。
+
 无 SPI，只验证 KWS：
 
 ```sh
