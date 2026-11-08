@@ -28,10 +28,11 @@ for path in (APP_DIR, TEST_DIR):
         sys.path.insert(0, path)
 
 import stm32_protocol as proto
+from spi4_bootstrap import configure_spi4_pins, ensure_spi4_device
 from spi_link import Stm32SpiLink
 from sg2002_temp import sample as read_temperature
 
-from maix import app, err, nn, pinmap
+from maix import app, err, nn
 
 log = logging.getLogger("JLU_LEDLAB.test")
 
@@ -192,26 +193,30 @@ def main():
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
 
-    for pin, func in (("A22", "SPI4_SCK"), ("A23", "SPI4_MISO"),
-                      ("A24", "SPI4_CS"), ("A25", "SPI4_MOSI")):
-        try:
-            r = pinmap.set_pin_function(pin, func)
-            if r != err.Err.ERR_NONE:
-                log.warning("pinmap %s -> %s: %s", pin, func, r)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("pinmap %s -> %s failed: %s", pin, func, exc)
-
     link = None
     if not args.no_spi:
+        bus = int(cfg.get("spi_bus", 4))
+        frequency = int(cfg.get("spi_frequency", 500_000))
+        retries = int(cfg.get("spi_retries", 5))
+        retry_delay = max(
+            0.0, float(cfg.get("spi_retry_delay_ms", 100)) / 1000.0)
+        settle_time = max(
+            0.0, float(cfg.get("spi4_settle_ms", 500)) / 1000.0)
         try:
+            if bus == 4:
+                ensure_spi4_device()
+                configure_spi4_pins()
             link = Stm32SpiLink(
-                bus=int(cfg.get("spi_bus", 3)),
+                bus=bus,
                 device=int(cfg.get("spi_device", 0)),
-                frequency=int(cfg.get("spi_frequency", 1_000_000)))
-            log.info("SPI /dev/spidev%d.%d @ %d Hz",
-                     int(cfg.get("spi_bus", 3)),
-                     int(cfg.get("spi_device", 0)),
-                     int(cfg.get("spi_frequency", 1_000_000)))
+                frequency=frequency,
+                retries=retries,
+                retry_delay=retry_delay,
+                settle_time=settle_time)
+            log.info("SPI /dev/spidev%d.%d @ %d Hz, retries=%d/%dms",
+                     bus, int(cfg.get("spi_device", 0)),
+                     frequency, retries,
+                     int(retry_delay * 1000))
         except Exception as exc:  # noqa: BLE001
             log.error("SPI open failed: %s", exc)
 

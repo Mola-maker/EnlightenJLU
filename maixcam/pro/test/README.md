@@ -63,10 +63,27 @@ MaixCAM Pro 外部 SPI4：
 Linux 设备：
 
 ```text
-/dev/spidev3.0
+/dev/spidev4.0
 ```
 
-SPI 模式 0、8 bit、1 MHz。ST-Link 不在本测试链路上；它只用于烧录 STM32。
+MaixCAM Pro 的 A22-A25 是 **软件模拟 SPI4**（`spi4@gpio` + `spi_gpio`），
+不是 `spidev3.0` 对应的硬件 SPI3。部分系统镜像启动后 `spi_gpio` 没有自动
+绑定，需要先执行：
+
+```sh
+echo spi4@gpio > /sys/bus/platform/drivers/spi_gpio/bind
+```
+
+`spi4` 的 spidev 驱动会拒绝显式写 `spi.mode = 0`，并固定报告 CS_HIGH 标志；
+因此程序只设置 `bits_per_word=8` 和 `max_speed_hz`，保持驱动默认 mode。
+
+SPI 模式 0、8 bit，默认 500 kHz。打开设备后等待 0.5 s，让软件 SPI4
+稳定；每个响应都会校验 magic、长度和 CRC，失败时最多重试 5 次，间隔
+100 ms。
+
+软件 SPI4 偶尔会在帧头前多送一个字节并丢掉末尾的保留 0，传输层会在
+CRC 校验通过时自动去掉首字节并补零恢复。连续坏帧最终由 20 Hz 心跳和
+HELLO 重建处理。ST-Link 不在本测试链路上；它只用于烧录 STM32。
 
 ## 4. 运行
 
@@ -141,11 +158,19 @@ python3 tools/probe_kws.py /root/models/am_3332_192_int8.mud \
 SPI 探测：
 
 ```sh
-python3 tools/probe_spi.py 3 0
+python3 tools/probe_spi.py 4 0
 ```
 
-如果返回 `rx magic 5aa5`，说明 STM32 已供电、接线正确并烧录了新固件；如果
-持续 `rx magic 0000`，优先检查 3.3V、共地、PA4–PA7 ↔ A22–A25 和 STM32 固件。
+探针会自动配置 A22-A25、绑定 `spi4@gpio`，并最多发送 10 次 HELLO。看到
+`link=2`（ACTIVE）和有效的 STATUS/CAPS 即表示链路已通；若持续 `bad magic`
+或 `0000`，优先检查 3.3V、共地、PA4–PA7 ↔ A22–A25 的接触，尤其是 A24/CS。
+
+主机侧协议/坏帧恢复测试：
+
+```sh
+cd /root/surplife/test
+python3 -m unittest -v tests/test_spi4_bootstrap.py
+```
 
 
 ## 7. 本次实测状态
@@ -157,9 +182,14 @@ python3 tools/probe_spi.py 3 0
 - 原始英文 TTS `hello`/`welcome` 对中文拼音代理关键词概率为 **0**，
   说明现有模型不能直接做英文 KWS；
 - SG2002 温度读取正常，实测约 **41.648 °C**，已构造 TEMP TLV；
-- `/dev/spidev0.0`～`spidev3.0` 均能打开，但当前没有收到 STM32 的
-  `5A A5` STATUS 响应（收到 `00 00`），需要检查 STM32 供电、SPI4 接线和
-  是否已经烧录新固件；
-- 2026-11-06：ST-Link V2 已在工作站上烧录 `PWM-Heater-test.bin`，`st-flash`
-  写入并校验通过，随后软件复位；下次把 STM32 接到 MaixCAM Pro 后重新运行
-  `python3 tools/probe_spi.py 3 0`，预期返回 `rx magic 5aa5`。
+- `/dev/spidev3.0` 能打开但 MISO 始终为 `00`，因为它不是外部 A22-A25
+  对应的总线；
+- 正确设备是 `/dev/spidev4.0`。绑定 `spi4@gpio` 后能与 STM32 交换 STATUS，
+  STM32 已进入 `ACTIVE`，CAPS 为协议 v1、3 个 glyph、15 路 PWM、
+  features `0x0F`；
+- 软件 SPI4 在系统负载下会间歇性返回 `5A 5A`、`5A FF` 或全零响应；其中
+  `5A 5A A5 ...` 是首字节偏移，可在 CRC 校验通过后恢复；
+- 传输层已加入 0.5 s 稳定等待、CRC 校验、5 次重试和链路丢失后重新 HELLO，
+  保留 20 Hz 心跳；
+- 2026-11-08：已实测 STM32 返回有效 STATUS；当前无灯牌动作、无温度样本，
+  `active_mask=0`，历史粘滞故障位为 `FORMAT | SPI`。

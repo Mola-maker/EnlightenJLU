@@ -1,6 +1,8 @@
 """Minimal MaixCAM SPI master link for the STM32 PWM-Heater board.
 
-This is a transport/reference module, not yet wired into voice_pwm.py.
+This is a transport/reference module.  On MaixCAM Pro the tested
+raw-spidev path is maixcam/pro/test/spi_link.py (software SPI4, /dev/spidev4.0);
+this module uses the MaixPy hardware SPI API and is primarily used on MaixCAM2.
 
 Typical use from a lightweight link process:
 
@@ -28,8 +30,10 @@ import stm32_protocol as p
 
 class Stm32SpiLink:
     def __init__(self, spi_id: int | None = None,
-                 frequency: int = 1_000_000,
-                 session_id: int | None = None):
+                 frequency: int = 500_000,
+                 session_id: int | None = None,
+                 retries: int = 6,
+                 retry_delay: float = 0.05):
         from maix import err, pinmap, spi, sys
 
         if sys.device_id() == "maixcam2":
@@ -71,6 +75,8 @@ class Stm32SpiLink:
         self._last_caps = None
         self._started = time.monotonic()
         self._lock = threading.Lock()
+        self.retries = max(1, int(retries))
+        self.retry_delay = max(0.0, float(retry_delay))
 
     @property
     def status(self):
@@ -103,15 +109,17 @@ class Stm32SpiLink:
         chunks: list[bytes] = []
 
         if self._hello_pending:
-            chunks.append(p.hello(heartbeat_ms=50,
-                                  features=p.FEATURE_PERFORM | p.FEATURE_TEMP))
+            chunks.append(p.hello(
+                heartbeat_ms=50,
+                features=(p.FEATURE_PERFORM | p.FEATURE_TEMP |
+                          p.FEATURE_HEARTBEAT)))
         elif self._temp is not None and (now - self._temp_sent_at) >= 1.0:
             chunks.append(self._temp)
             self._temp_sent_at = now
 
         if self._pending_event is not None:
             chunks.append(self._pending_event[0])
-        else:
+        elif not self._hello_pending:
             chunks.append(p.heartbeat(
                 maix_uptime_ms=int((now - self._started) * 1000),
                 state_flags=0,
@@ -127,26 +135,40 @@ class Stm32SpiLink:
             raise RuntimeError("SPI v1 payload exceeds 44 bytes")
         return payload
 
+    def _transaction_once(self, payload):
+        seq = self.seq
+        self.seq = (self.seq + 1) & 0xFFFFFFFF
+        tx = p.build_frame(p.TYPE_CONTROL, seq, self.session_id, payload)
+        rx = bytes(self._spi.write_read(tx, len(tx)))
+        if len(rx) != p.FRAME_SIZE:
+            raise RuntimeError(f"short SPI response: {len(rx)}")
+        return p.parse_status(rx)
+
     def transaction(self):
         with self._lock:
             now = time.monotonic()
             payload = self._payload(now)
-            tx = p.build_frame(p.TYPE_CONTROL, self.seq,
-                               self.session_id, payload)
-            self.seq = (self.seq + 1) & 0xFFFFFFFF
-
-            rx = self._spi.write_read(tx, len(tx))
-            if (not isinstance(rx, (bytes, bytearray)) or
-                    len(rx) != p.FRAME_SIZE):
+            last_error = None
+            for attempt in range(self.retries):
+                try:
+                    status, caps = self._transaction_once(payload)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    if attempt + 1 < self.retries:
+                        time.sleep(self.retry_delay)
+            else:
                 raise RuntimeError(
-                    f"short SPI response: {len(rx) if rx else 0}")
+                    f"invalid SPI response after {self.retries} "
+                    f"attempts: {last_error}") from last_error
 
-            status, caps = p.parse_status(bytes(rx))
             self._last_status = status
             self._last_caps = caps
 
-            if self._hello_pending and status.link_state == p.LINK_ACTIVE:
-                self._hello_pending = False
+            # STATUS is one transaction behind.  Keep HELLO pending until
+            # a later STATUS confirms ACTIVE; this recovers from an STM32
+            # reset or a 500 ms link timeout.
+            self._hello_pending = (status.link_state != p.LINK_ACTIVE)
 
             if self._pending_event is not None:
                 _, event_seq = self._pending_event
@@ -158,3 +180,11 @@ class Stm32SpiLink:
                     self._pending_event = None
 
             return status
+
+    def close(self):
+        close = getattr(self._spi, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception:  # noqa: BLE001
+                pass

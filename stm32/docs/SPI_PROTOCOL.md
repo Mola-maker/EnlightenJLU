@@ -14,7 +14,7 @@
 | 数据位 | 8 bit |
 | 位序 | MSB first |
 | 片选 | 低有效，硬件 NSS |
-| 建议时钟 | 1 MHz 起步，MaixCAM SPI4 上限约 1.25 MHz |
+| 建议时钟 | MaixCAM Pro 软件 SPI4：500 kHz，已验证上限约 1.25 MHz |
 | 电平 | 双方 3.3 V |
 | 连接 | SCK/MISO/MOSI/CS + 共地 |
 
@@ -27,6 +27,29 @@ MaixCAM 侧：
 
 MaixCAM2 的默认配置已按 `B18/B19/B20/B21` 和 `/dev/spidev2.1` 设计；实际以
 板端 `pinmap` 和外部排针为准。
+
+Linux 设备节点：
+
+| 设备 | 节点 | 说明 |
+|---|---|---|
+| MaixCAM2 | `/dev/spidev2.1` | 硬件 SPI2，CS1 |
+| MaixCAM / MaixCAM-Pro | `/dev/spidev4.0` | A22-A25 软件模拟 SPI4 |
+
+MaixCAM Pro 的 SPI4 由 `spi4@gpio` + `spi_gpio` 软件模拟实现，**不是**
+`/dev/spidev3.0` 对应的硬件 SPI3。部分镜像启动后 `spi_gpio` 不会自动绑定，
+需要执行：
+
+```sh
+echo spi4@gpio > /sys/bus/platform/drivers/spi_gpio/bind
+```
+
+该 spidev 驱动拒绝显式写 `mode=0` 并固定报告 CS_HIGH 标志，主机应保持驱动
+默认 mode，只设置 8 bit 和时钟；打开设备后建议等待约 0.5 s。
+
+软件 SPI4 在系统负载下可能返回坏帧，主机必须按 magic/CRC 校验并重试。常见
+坏帧 `5A 5A A5 ...` 是首字节偏移：可丢弃首字节、在末尾补 `0x00`，重新校验
+CRC 后接受；校验失败的帧必须整帧重发。真实建议为 500 kHz、20 Hz 心跳，
+失败重试 5 次，间隔 100 ms。
 
 ## 2. 帧格式
 
@@ -261,11 +284,14 @@ STM32 在本次 SPI 传输结束后才能解析请求，因此 **STATUS 是下�
 `Core/Inc/glyph_map.h` 中的 X-Macro 是唯一映射源：
 
 ```text
-GLYPH_CHANG ("长") -> BOARD_PWM_PWM1 -> TIM2_CH1 / PA0 / 2 kHz
-GLYPH_CHUN  ("春") -> BOARD_PWM_PWM2 -> TIM2_CH2 / PA1 / 2 kHz
+GLYPH_CHANG     (bit 0, "长")   -> BOARD_PWM_PWM1 -> TIM2_CH1 / PA0 / 2 kHz
+GLYPH_CHUN      (bit 1, "春")   -> BOARD_PWM_PWM2 -> TIM2_CH2 / PA1 / 2 kHz
+GLYPH_ALL_LAMPS (bit 2, "全灯") -> 测试扩展：聚合 PWM1..PWM13
 ```
 
-协议只传数字 `glyph_id`/`glyph_mask`，不传 TIM/CH，也不传中文字符串。
+`GLYPH_ALL_LAMPS` 是测试用逻辑字牌，不映射单个 TIM/CH；表演引擎把它的占空比
+聚合到 PWM1–PWM13，HEAT1/HEAT2 始终排除。协议只传数字
+`glyph_id`/`glyph_mask`，不传 TIM/CH，也不传中文字符串。
 
 ## 8. 当前 STM32 实现
 
@@ -284,6 +310,7 @@ GLYPH_CHUN  ("春") -> BOARD_PWM_PWM2 -> TIM2_CH2 / PA1 / 2 kHz
 
 - “长” → PWM1 → TIM2_CH1 / PA0 / 2 kHz
 - “春” → PWM2 → TIM2_CH2 / PA1 / 2 kHz
+- “全灯”测试逻辑字牌（bit 2）→ PWM1–PWM13，排除 HEAT
 - 15 路 PWM 全部初始化为 0
 - HEAT1/HEAT2 固定 0%
 - 仅接收温度并在 STATUS 回显，不做 PID
