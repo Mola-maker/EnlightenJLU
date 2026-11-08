@@ -122,9 +122,28 @@ http://192.168.43.229/
 ```
 
 服务优先监听 80；如果 80 已占用会自动使用 8080。网页包含 13 路灯位预览、
-整体亮度、常亮/呼吸/波浪/追逐/星光、目标灯组、关键词待机、固件预设特效，
-适配手机端。亮度滑杆需要先烧录 `PWM-Heater-web.bin`；未烧录时页面会显示
-“待升级”，只更新浏览器预览，不覆盖 STM32 的待机呼吸。
+整体亮度、0.25×–3.0× 速度、常亮/呼吸/波浪/追逐/星光/交替/流星/心跳、
+目标灯组、场景预设、单灯 13 路独立调光、关键词待机、固件预设特效，以及
+SPI 链路、故障位、控制序号和 SG2002 结温，适配手机端。
+
+亮度滑杆和单灯调光需要先烧录 `PWM-Heater-web.bin`；未烧录时页面会显示
+“待升级”，只更新浏览器预览，不覆盖 STM32 的待机呼吸。单灯面板使用
+`manual` 命令把 13 个 0–1000 duty 直接写入 `SET_LAMPS`。
+
+网页控制 API 示例：
+
+```sh
+curl -X POST http://192.168.43.229/api/command \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"effect","effect":"comet","target":8191,"brightness":80,"speed":1.5}'
+
+curl -X POST http://192.168.43.229/api/command \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"manual","duties":[1000,0,900,0,800,0,700,0,600,0,500,0,400],"speed":1.0}'
+```
+
+`GET /api/state` 返回 `speed`、`manual_duties`、`temp_mc`、`temp_valid` 和
+`fault_flags`；`GET /api/stream` 为 SSE 实时状态。
 
 设备已安装 `/etc/init.d/S99surplife`，开机自动切换 USB host、等待 USB
 麦克风，然后启动 KWS + Web + SPI 服务；没有麦克风时退化为 Web-only。

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#080b12">
   <title>JLU Lamp Lab · 13路灯牌控制</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=20261108b">
 </head>
 <body>
   <div class="ambient ambient-a"></div>
@@ -37,6 +37,7 @@
         <div class="hero-meta">
           <span class="meta-item"><i class="meta-dot live"></i><span id="linkText">等待链路</span></span>
           <span class="meta-item"><span id="fpsText">20 Hz</span> 总线</span>
+          <span class="meta-item" id="tempReadout">结温 —</span>
           <span class="meta-item" id="brightnessReadout">75% 亮度</span>
         </div>
       </div>
@@ -69,6 +70,15 @@
           <div class="range-labels"><span>关闭</span><span>柔和</span><span>全亮</span></div>
         </div>
 
+        <div class="slider-block speed-block">
+          <div class="row-between">
+            <label for="speed">灯效速度</label>
+            <output id="speedValue" for="speed">1.0×</output>
+          </div>
+          <input id="speed" class="range speed-range" type="range" min="25" max="300" step="5" value="100">
+          <div class="range-labels"><span>慢</span><span>标准</span><span>快</span></div>
+        </div>
+
         <div class="control-group">
           <div class="row-between">
             <span class="group-label">目标灯组</span>
@@ -85,7 +95,7 @@
         <div class="control-group">
           <div class="row-between">
             <span class="group-label">动态灯效</span>
-            <span class="hint">在浏览器中平滑预览</span>
+            <span class="hint">实时下发 STM32 · 平滑预览</span>
           </div>
           <div class="effect-grid" id="effectGrid">
             <button type="button" class="effect-card" data-effect="solid">
@@ -108,6 +118,33 @@
               <span class="effect-icon icon-sparkle"></span>
               <strong>星光</strong><small>柔和闪烁</small>
             </button>
+            <button type="button" class="effect-card" data-effect="theater">
+              <span class="effect-icon icon-theater"></span>
+              <strong>交替</strong><small>奇偶灯交叠</small>
+            </button>
+            <button type="button" class="effect-card" data-effect="comet">
+              <span class="effect-icon icon-comet"></span>
+              <strong>流星</strong><small>拖尾游走</small>
+            </button>
+            <button type="button" class="effect-card" data-effect="pulse">
+              <span class="effect-icon icon-pulse"></span>
+              <strong>心跳</strong><small>双拍脉冲</small>
+            </button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <div class="row-between">
+            <span class="group-label">场景预设</span>
+            <span class="hint">一键切换氛围</span>
+          </div>
+          <div class="scene-strip" id="scenePresets">
+            <button type="button" class="scene-btn" data-scene="full">全亮</button>
+            <button type="button" class="scene-btn" data-scene="soft">柔光</button>
+            <button type="button" class="scene-btn" data-scene="breath">呼吸</button>
+            <button type="button" class="scene-btn" data-scene="comet">流星</button>
+            <button type="button" class="scene-btn" data-scene="long">长字</button>
+            <button type="button" class="scene-btn" data-scene="spring">春字</button>
           </div>
         </div>
 
@@ -132,10 +169,22 @@
         <p class="side-note">点按灯位切换目标。青蓝色为已选，暖金色为当前亮度。</p>
         <div id="channelGrid" class="channel-grid"></div>
 
+        <details class="manual-card" id="manualCard">
+          <summary>单灯调光 <span>13 路独立亮度</span></summary>
+          <p>拖动每一路 PWM 的亮度，使用固件 SET_LAMPS 直接下发。适合修字、补光和逐灯校准。</p>
+          <div id="manualGrid" class="manual-grid"></div>
+          <div class="manual-actions">
+            <button type="button" class="mini-btn" id="manualApply">应用单灯亮度</button>
+            <span id="manualHint">0–100% · HEAT 不参与</span>
+          </div>
+        </details>
+
         <div class="health-card">
           <div class="health-row"><span>SPI 链路</span><strong id="linkValue">—</strong></div>
           <div class="health-row"><span>活动掩码</span><strong id="maskValue">—</strong></div>
           <div class="health-row"><span>事件序号</span><strong id="eventValue">—</strong></div>
+          <div class="health-row"><span>主控结温</span><strong id="tempValue">—</strong></div>
+          <div class="health-row"><span>控制序号</span><strong id="seqValue">—</strong></div>
           <div class="health-row"><span>固件直控</span><strong id="directValue">—</strong></div>
           <div class="health-row"><span>故障位</span><strong id="faultValue">—</strong></div>
         </div>
@@ -160,11 +209,11 @@
 
     <footer class="footer">
       <span>JLU Lamp Lab</span>
-      <span>PWM1–PWM13 · HEAT 锁定关闭</span>
+      <span>PWM1–PWM13 · 100 kHz · HEAT 锁定关闭</span>
     </footer>
   </main>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20261108b"></script>
 </body>
 </html>

@@ -96,6 +96,43 @@ class WebControllerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ctrl.command({"command": "effect", "brightness": 101})
 
+    def test_speed_is_stored_and_validated(self):
+        link = FakeLink(features=p.FEATURE_DIRECT)
+        ctrl = LampController(link)
+        result = ctrl.command({"command": "effect", "effect": "breath",
+                               "brightness": 50, "speed": 2.5})
+        self.assertEqual(result["speed"], 2.5)
+        with self.assertRaises(ValueError):
+            ctrl.command({"command": "effect", "speed": 0})
+
+    def test_manual_command_writes_all_13_duties(self):
+        link = FakeLink(features=p.FEATURE_DIRECT)
+        ctrl = LampController(link)
+        duties = [i * 50 for i in range(13)]
+        ctrl.command({"command": "manual", "duties": duties})
+        ctrl.tick(link.status)
+        self.assertEqual(link.lamps, duties)
+        self.assertEqual(ctrl.snapshot()["effect"], "manual")
+
+    def test_manual_rejects_wrong_length_or_range(self):
+        link = FakeLink(features=p.FEATURE_DIRECT)
+        ctrl = LampController(link)
+        with self.assertRaises(ValueError):
+            ctrl.command({"command": "manual", "duties": [1, 2]})
+        with self.assertRaises(ValueError):
+            ctrl.command({"command": "manual", "duties": [1001] * 13})
+
+    def test_new_effects_write_target_only(self):
+        link = FakeLink(features=p.FEATURE_DIRECT)
+        ctrl = LampController(link)
+        for effect in ("theater", "comet", "pulse", "wave", "chase", "sparkle"):
+            ctrl.command({"command": "effect", "effect": effect,
+                          "target": 0b101, "brightness": 40})
+            ctrl.tick(link.status)
+            self.assertEqual(len(link.lamps), 13)
+            self.assertEqual(link.lamps[1], 0, effect)
+            self.assertGreater(max(link.lamps), 0, effect)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,9 +17,13 @@ import stm32_protocol as p
 LAMP_COUNT = p.LAMP_COUNT
 ALL_LAMPS = 0x1FFF
 DEFAULT_TARGET = ALL_LAMPS
+DEFAULT_SPEED = 1.0
+SPEED_MIN = 0.25
+SPEED_MAX = 3.0
 
 EFFECT_NAMES = (
     "solid", "breath", "wave", "chase", "sparkle",
+    "theater", "comet", "pulse",
 )
 FIRMWARE_ACTIONS = {
     "standby": p.ACTION_STANDBY,
@@ -43,7 +47,9 @@ class LampController:
         self.effect = "breath"
         self.target = DEFAULT_TARGET
         self.brightness = 75
+        self.speed = DEFAULT_SPEED
         self.duties = [0] * LAMP_COUNT
+        self.manual_duties = [0] * LAMP_COUNT
         self.effect_started = time.monotonic()
 
         self.gate_until = 0.0
@@ -70,7 +76,9 @@ class LampController:
                 "effect": self.effect,
                 "target": self.target,
                 "brightness": self.brightness,
+                "speed": self.speed,
                 "duties": list(self.duties),
+                "manual_duties": list(self.manual_duties),
                 "direct_ready": direct_ready,
                 "caps": caps or {},
                 "link_state": int(status.link_state) if status else -1,
@@ -92,7 +100,10 @@ class LampController:
         command = str(payload.get("command", "")).strip()
         with self.lock:
             if command == "effect":
-                effect = str(payload.get("effect", self.effect))
+                effect = str(payload.get("effect", "")).strip()
+                if not effect:
+                    effect = (self.effect if self.effect in EFFECT_NAMES
+                              else "solid")
                 if effect not in EFFECT_NAMES:
                     raise ValueError(f"unknown effect: {effect}")
                 self.mode = "direct"
@@ -101,12 +112,16 @@ class LampController:
                                                               self.target))
                 self.brightness = self._parse_brightness(
                     payload.get("brightness", self.brightness))
+                self.speed = self._parse_speed(
+                    payload.get("speed", self.speed))
                 self.effect_started = time.monotonic()
                 self.message = "web effect"
             elif command == "kws":
                 self.mode = "kws"
                 self.effect = "breath"
                 self.target = DEFAULT_TARGET
+                self.brightness = 75
+                self.speed = 1.0
                 self.gate_until = 0.0
                 self.gate_event = None
                 self.gate_applied = False
@@ -122,6 +137,30 @@ class LampController:
                 self.off_sent = False
                 self.link.clear_lamps()
                 self.message = "all off"
+            elif command == "manual":
+                raw = payload.get("duties")
+                if not isinstance(raw, list) or len(raw) != LAMP_COUNT:
+                    raise ValueError(f"duties must contain {LAMP_COUNT} values")
+                duties = []
+                for value in raw:
+                    try:
+                        duty = int(round(float(value)))
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError("duty must be 0..1000") from exc
+                    if not 0 <= duty <= 1000:
+                        raise ValueError("duty must be 0..1000")
+                    duties.append(duty)
+                self.mode = "direct"
+                self.effect = "manual"
+                self.manual_duties = duties
+                self.duties = list(duties)
+                self.target = sum(1 << i for i, duty in enumerate(duties)
+                                  if duty > 0)
+                self.brightness = max(duties) // 10
+                self.speed = self._parse_speed(
+                    payload.get("speed", self.speed))
+                self.effect_started = time.monotonic()
+                self.message = "manual trim"
             elif command == "firmware":
                 action = str(payload.get("action", "")).strip()
                 if action not in FIRMWARE_ACTIONS:
@@ -140,6 +179,8 @@ class LampController:
                                                               self.target))
                 self.brightness = self._parse_brightness(
                     payload.get("brightness", self.brightness))
+                self.speed = self._parse_speed(
+                    payload.get("speed", self.speed))
                 if self.mode == "direct":
                     self.effect_started = time.monotonic()
             else:
@@ -239,9 +280,11 @@ class LampController:
     def _compute_duties(self, now):
         if self.effect == "off":
             return [0] * LAMP_COUNT
+        if self.effect == "manual":
+            return [max(0, min(1000, int(value))) for value in self.manual_duties]
         base = self.brightness * 10
         target = self.target & ALL_LAMPS
-        elapsed = now - self.effect_started
+        elapsed = (now - self.effect_started) * self.speed
         duties = [0] * LAMP_COUNT
 
         if self.effect == "solid":
@@ -279,6 +322,40 @@ class LampController:
                 duties[i] = int(base * (0.08 + 0.92 * level))
             return duties
 
+        if self.effect == "theater":
+            phase = (elapsed % 1.8) / 1.8
+            curve = 0.5 - 0.5 * math.cos(2.0 * math.pi * phase)
+            for i in range(LAMP_COUNT):
+                if not (target & (1 << i)):
+                    continue
+                level = curve if i % 2 == 0 else 1.0 - curve
+                duties[i] = int(base * (0.08 + 0.92 * level))
+            return duties
+
+        if self.effect == "comet":
+            phase = (elapsed % 2.6) / 2.6
+            head = phase * LAMP_COUNT
+            for i in range(LAMP_COUNT):
+                if not (target & (1 << i)):
+                    continue
+                distance = (head - i) % LAMP_COUNT
+                level = math.exp(-distance / 2.1)
+                duties[i] = int(base * (0.04 + 0.96 * level))
+            return duties
+
+        if self.effect == "pulse":
+            phase = (elapsed % 1.6) / 1.6
+            if phase < 0.12:
+                level = 1.0
+            elif phase < 0.22:
+                level = 0.18
+            elif phase < 0.38:
+                level = 0.72
+            else:
+                level = 0.06 + 0.12 * (1.0 - (phase - 0.38) / 0.62)
+            return [int(base * level) if target & (1 << i) else 0
+                    for i in range(LAMP_COUNT)]
+
         # sparkle: smooth, deterministic, no random flicker.
         for i in range(LAMP_COUNT):
             if not (target & (1 << i)):
@@ -300,6 +377,16 @@ class LampController:
         return value
 
     @staticmethod
+    def _parse_speed(value):
+        try:
+            speed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("speed must be 0.25..3.0") from exc
+        if not SPEED_MIN <= speed <= SPEED_MAX:
+            raise ValueError("speed must be 0.25..3.0")
+        return round(speed, 2)
+
+    @staticmethod
     def _parse_target(value):
         try:
             value = int(value)
@@ -318,7 +405,7 @@ def create_app(controller, web_dir: Path, port: int | None = None):
 
     @app.after_request
     def no_cache(response):
-        if request.path.startswith("/api/"):
+        if request.path.startswith(("/api/", "/static/")):
             response.headers["Cache-Control"] = "no-store"
         return response
 
