@@ -213,6 +213,39 @@ ssh root@192.168.43.229 'chmod 755 /etc/init.d/S99surplife'
 `maix.touchscreen.TouchScreen()` 会自动扫描并找到 event2，不要为了 event
 编号在启动时重绑触摸。
 
+### 4.1.2 温度命令行监控（PID 调试）
+
+Web 控制台不再作为温度调试入口。先用独立命令行工具确认 SG2002 结温：
+
+```sh
+cd /root/surplife/test
+python3 -u tools/temp_monitor.py --interval 1
+python3 -u tools/temp_monitor.py --interval 0.5 --count 20
+python3 -u tools/temp_monitor.py --format csv --count 20 > /tmp/temp.csv
+python3 -u tools/temp_monitor.py --format json --count 5
+```
+
+输出示例：
+
+```text
+2026-11-11T03:27:57.813+00:00   57.031 °C  src=sysfs  min=56.681 max=57.031 avg=56.703  trend=+0.350 °C/s
+```
+
+默认读取：
+
+```text
+/sys/class/thermal/thermal_zone0/temp
+```
+
+`--source reg` 可退回直接读取 SG2002 TEMPSEN 寄存器；`--window` 控制滚动
+min/max/avg 样本数。做 PID 前先停掉 Web/KWS 服务，避免服务负载本身改变
+结温基线：
+
+```sh
+/etc/init.d/S99surplife stop
+python3 -u tools/temp_monitor.py --interval 1
+```
+
 ### 4.2 USB 麦克风检查
 
 USB 麦克风当前为 ALSA card 2：
