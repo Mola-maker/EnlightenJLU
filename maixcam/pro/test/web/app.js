@@ -17,6 +17,13 @@
     starting: "启动中", listening: "监听中", trigger: "已触发",
     paused: "已暂停", unavailable: "未接入",
   };
+  const VIEWS = {
+    lamp: { eyebrow: "MAIXCAM · STM32 · LAMP WAVEFORM", title: "灯牌波形" },
+    heat: { eyebrow: "MAIXCAM · STM32 · HEATER WAVEFORM", title: "加热波形" },
+    pid: { eyebrow: "PID · ANCHOR / MARGIN", title: "PID 锚点" },
+    kws: { eyebrow: "KWS · KEYWORD RECOGNITION", title: "关键词识别" },
+  };
+  let currentView = "lamp";
   const state = {
     link: { state: -1, fault_flags: 0 },
     lamp: {
@@ -60,6 +67,24 @@
     el.classList.add("show");
     clearTimeout(toast._timer);
     toast._timer = setTimeout(() => el.classList.remove("show"), 2600);
+  }
+
+  function showView(name) {
+    if (!VIEWS[name]) return;
+    currentView = name;
+    document.querySelectorAll(".mode[data-view]").forEach((button) => {
+      button.classList.toggle("is-active", button.dataset.view === name);
+    });
+    document.querySelectorAll(".view-card[data-view]").forEach((card) => {
+      card.classList.toggle("is-active", card.dataset.view === name);
+    });
+    $("#viewEyebrow").textContent = VIEWS[name].eyebrow;
+    $("#pageTitle").textContent = VIEWS[name].title;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    requestAnimationFrame(() => {
+      drawLampChart();
+      drawHeatChart();
+    });
   }
 
   function buildLampBars() {
@@ -463,14 +488,10 @@
     || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   setTheme(initialTheme);
 
-  document.querySelectorAll(".mode[data-scroll]").forEach((button) => {
-    button.addEventListener("click", () => {
-      document.querySelectorAll(".mode").forEach((b) => b.classList.remove("is-active"));
-      button.classList.add("is-active");
-      const target = document.getElementById(button.dataset.scroll);
-      if (target) target.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
+  document.querySelectorAll(".mode[data-view]").forEach((button) => {
+    button.addEventListener("click", () => showView(button.dataset.view));
   });
+  showView(currentView);
 
   $("#themeButton").addEventListener("click", () => {
     setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");

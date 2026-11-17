@@ -423,3 +423,24 @@ canvas { display: block; width: 100%; height: 188px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
 }
+
+/* One functional view at a time.  The left rail is real navigation, not
+   anchors into a single dashboard. */
+.workspace { display: block; }
+.workspace .view-card {
+  display: none;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+.workspace .view-card.is-active { display: block; }
+.workspace .lamp-card,
+.workspace .heat-card,
+.workspace .kws-card,
+.workspace .pid-card {
+  grid-column: auto;
+  grid-row: auto;
+}
+.workspace .view-card canvas { height: 300px; }
+@media (max-width: 560px) {
+  .workspace .view-card canvas { height: 230px; }
+}

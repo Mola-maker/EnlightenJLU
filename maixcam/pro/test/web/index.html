@@ -13,10 +13,10 @@
       <div class="brand">JLU<i></i></div>
       <p class="rail-label">LOCAL CONSOLE</p>
       <nav class="mode-list" aria-label="页面导航">
-        <button class="mode is-active" type="button" data-scroll="lampCard"><span>01</span>灯牌波形</button>
-        <button class="mode" type="button" data-scroll="heatCard"><span>02</span>加热波形</button>
-        <button class="mode" type="button" data-scroll="pidCard"><span>03</span>PID 锚点</button>
-        <button class="mode" type="button" data-scroll="kwsCard"><span>04</span>关键词识别</button>
+        <button class="mode is-active" type="button" data-view="lamp"><span>01</span>灯牌波形</button>
+        <button class="mode" type="button" data-view="heat"><span>02</span>加热波形</button>
+        <button class="mode" type="button" data-view="pid"><span>03</span>PID 锚点</button>
+        <button class="mode" type="button" data-view="kws"><span>04</span>关键词识别</button>
       </nav>
       <div class="rail-bottom">
         <div class="rail-state"><i class="dot" id="railDot"></i><span id="railLink">连接中</span></div>
@@ -39,8 +39,8 @@
 
       <div class="page-heading">
         <div>
-          <p class="eyebrow">MAIXCAM · STM32 TELEMETRY</p>
-          <h1>灯牌与温控</h1>
+          <p class="eyebrow" id="viewEyebrow">MAIXCAM · STM32 · LAMP WAVEFORM</p>
+          <h1 id="pageTitle">灯牌波形</h1>
         </div>
         <div class="heading-right">
           <span class="save-badge" id="updatedAt"><i></i>实时</span>
@@ -48,7 +48,7 @@
       </div>
 
       <section class="workspace">
-        <article class="card lamp-card" id="lampCard">
+        <article class="card lamp-card view-card is-active" id="lampCard" data-view="lamp">
           <div class="card-heading">
             <div>
               <h2>灯牌波形</h2>
@@ -98,7 +98,7 @@
           </div>
         </article>
 
-        <article class="card heat-card" id="heatCard">
+        <article class="card heat-card view-card" id="heatCard" data-view="heat">
           <div class="card-heading">
             <div>
               <h2>加热波形</h2>
@@ -141,7 +141,7 @@
           </div>
         </article>
 
-        <article class="card kws-card" id="kwsCard">
+        <article class="card kws-card view-card" id="kwsCard" data-view="kws">
           <div class="card-heading">
             <div>
               <h2>关键词识别</h2>
@@ -174,7 +174,7 @@
           </div>
         </article>
 
-        <article class="card pid-card" id="pidCard">
+        <article class="card pid-card view-card" id="pidCard" data-view="pid">
           <div class="card-heading">
             <div>
               <h2>PID 锚点</h2>
