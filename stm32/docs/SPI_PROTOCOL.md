@@ -3,7 +3,7 @@
 本协议用于 MaixCAM（SPI 主机）与 STM32F103（SPI 从机）之间的控制、状态和温度数据交换。
 
 - MaixCAM：SPI 主机，产生语音/表演事件和温度样本。
-- STM32：SPI 从机，执行字牌 PWM 表演，接收温度，保留后续 PID 加热接口。
+- STM32：SPI 从机，执行字牌 PWM 表演，接收温度，并在安全包络内执行主机下发的 HEAT1/HEAT2 占空比。
 - USART3：仅 STM32 本地调试，不参与板间通信，也不作为 SPI 失效后的控制回退。
 
 ## 1. 物理层
@@ -160,9 +160,40 @@ u16 duty_permille[13]     PWM1..PWM13，0..1000
 
 立即关闭所有字牌输出和加热输出。该命令不要求已经完成 HELLO。
 
-#### THERMAL_CONFIG = 0x30，保留
+#### THERMAL_CONFIG = 0x30，len = 18
 
-v1 不实现加热/PID。收到该 TLV 时 STM32 置 `HEATER_UNSUPPORTED`，HEAT1/HEAT2 保持 0%。
+```text
+0  i32  setpoint_mc     目标结温，例如 43000 = 43.000 °C
+4  u32  margin_mc       过温硬上限裕量，例如 3000 = ±3 °C
+8  u16  kp_x100         Kp * 100，单位 permille/°C
+10 u16  ki_x100         Ki * 100，单位 permille/(°C*s)
+12 u16  kd_x100         Kd * 100，默认 0（传感器 1 Hz，D 易放大噪声）
+14 u16  max_duty        HEAT 最大占空比，0..1000 permille
+16 u8   enable          1=允许加热，0=强制关闭
+17 u8   reserved        0
+```
+
+配置只建立 STM32 的安全包络；PID 运算在 MaixCAM 的
+`tools/thermal_pid.py` 中执行，便于命令行打印和调参。超过
+`setpoint + margin` 时 STM32 强制 HEAT=0，并置 `OVERTEMP`。
+
+#### HEATER = 0x31，len = 4
+
+```text
+0  u16  duty_permille   请求 HEAT1/HEAT2 占空比，0..1000
+2  u8   enable          1=允许，0=关闭
+3  u8   reserved        0
+```
+
+主机应周期发送（建议 1 Hz 或更快）。STM32 仍会执行以下硬保护：
+
+- 未收到 `THERMAL_CONFIG`；
+- 温度样本过期或无效；
+- 温度达到 `setpoint + margin`；
+- SPI 链路丢失；
+- `ALL_OFF`。
+
+任一条件成立时 HEAT1/HEAT2=0。
 
 ### 3.2 状态 TLV（STM32 -> MaixCAM）
 
@@ -178,8 +209,14 @@ v1 不实现加热/PID。收到该 TLV 时 STM32 置 `HEATER_UNSUPPORTED`，HEAT
 22 u16  temp_age_ms        当前温度年龄，0xFFFF 表示无有效样本
 24 u8   temp_valid         0/1
 25 u8   link_state         0=BOOT, 1=WAIT_HELLO, 2=ACTIVE, 3=LOST, 4=FAULT
-26 u16  temp_sample_seq    最近一次 TEMP 的样本序号
-28 u8   temp_source        0=sysfs, 1=reg, 0xFF=unknown
+26 u16  heater_duty       当前 HEAT1/HEAT2 占空比，0..1000
+28 u8   heater_flags/temp_source
+                            bit0 temp_source (0=sysfs,1=reg)
+                            bit1 enable
+                            bit2 active (duty>0)
+                            bit3 overtemp
+                            bit4 temp_invalid
+                            bit5 configured
 29 u8   glyph_state[GLYPH_COUNT]
 ```
 
@@ -201,7 +238,7 @@ v1 不实现加热/PID。收到该 TLV 时 STM32 置 `HEATER_UNSUPPORTED`，HEAT
 | 1 | TEMP |
 | 2 | HEARTBEAT |
 | 3 | EGG |
-| 4 | THERMAL_PID（v1 为 0） |
+| 4 | THERMAL_PID（当前固件为 1） |
 | 5 | DIRECT（web 直控固件为 1） |
 
 ## 4. 故障位
@@ -215,11 +252,13 @@ v1 不实现加热/PID。收到该 TLV 时 STM32 置 `HEATER_UNSUPPORTED`，HEAT
 | 4 | NEED_HELLO | 未握手却收到 PERFORM |
 | 5 | TEMP_STALE | 温度样本过旧 |
 | 6 | TEMP_INVALID | 温度值无效 |
-| 7 | HEATER_UNSUPPORTED | 收到 v1 未实现的加热配置 |
+| 7 | HEATER_UNSUPPORTED | 旧版 v1 未实现加热配置 |
 | 8 | BAD_MASK | glyph_mask 含未知位或为 0 |
 | 9 | PROTOCOL | 协议版本不兼容 |
 | 10 | LINK_LOST | 链路超时 |
-| 11..15 | 保留 |
+| 11 | OVERTEMP | 温度达到 `setpoint + margin` |
+| 12 | THERMAL_CONFIG | 加热配置长度/范围错误 |
+| 13..15 | 保留 |
 
 ## 5. 主从交互
 
@@ -328,17 +367,20 @@ GLYPH_ALL_LAMPS (bit 2, "全灯") -> 测试扩展：聚合 PWM1..PWM13
 - “全灯”测试逻辑字牌（bit 2）→ PWM1–PWM13，排除 HEAT
 - 15 路 PWM 全部初始化为 0
 - web 固件支持 `SET_LAMPS`，可独立设置 PWM1–PWM13 的 0..1000‰ 亮度
-- HEAT1/HEAT2 固定 0%
+- DIRECT 灯效模式下 HEAT1/HEAT2 仍强制 0%；温控使用独立 `HEATER` TLV
 - 仅接收温度并在 STATUS 回显，不做 PID
 - SPI 超时 500 ms，超时后全部输出关闭
 - 收到 HELLO 后仍需显式 STANDBY/GATE 才点灯
 - USART3 只打印本地调试日志
 
-## 9. 加热接口预留
+## 9. 加热/PID 接口
 
-v1 接收 TEMP，但不控制 HEAT1/HEAT2。后续 PID 接入时扩展：
+当前固件接收 TEMP 和 THERMAL_CONFIG，并执行 HEATER 占空比。PID 在 MaixCAM
+命令行端运行，STM32 只做执行器与安全包络：
 
-- `THERMAL_CONFIG`：目标温度、Kp/Ki/Kd、最大占空比、超时；
-- `HEATER_ENABLE`：显式使能；
-- 温度过期、链路丢失、未使能时加热强制关闭；
-- 控制周期建议 1 s 或更慢，因为 SG2002 温度传感器约 1.048 s 更新一次。
+- `THERMAL_CONFIG`：目标温度、±裕量、Kp/Ki/Kd（主机调参记录）、最大占空比、使能；
+- `HEATER`：显式请求 HEAT1/HEAT2 占空比；
+- 温度过期、温度无效、过温、链路丢失、未配置或未使能时加热强制关闭；
+- 控制周期建议 1 s；SG2002 温度传感器约 1.048 s 更新一次。
+- 默认 PID 采用 **PI（Kd=0）**：长时间常数的热对象用积分消除稳态误差，
+  P 提供接近目标的快速收敛；1 Hz 温度存在量化/噪声，D 项通常只会放大抖动。

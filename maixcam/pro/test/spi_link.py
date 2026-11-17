@@ -59,6 +59,9 @@ class Stm32SpiLink:
         self._hello_pending = True
         self._pending_event = None
         self._direct_duties = None
+        self._thermal_config = None
+        self._thermal_config_pending = False
+        self._heater = None
         self._temp = None
         self._temp_sent_at = 0.0
         self._last_status = None
@@ -91,6 +94,22 @@ class Stm32SpiLink:
         with self._lock:
             self._direct_duties = None
 
+    def set_thermal_config(self, setpoint_mc, margin_mc, kp_x100=6000,
+                           ki_x100=200, kd_x100=0, max_duty=300,
+                           enable=True):
+        with self._lock:
+            self._thermal_config = p.thermal_config(
+                setpoint_mc, margin_mc, kp_x100, ki_x100, kd_x100,
+                max_duty, enable)
+
+    def set_heater(self, duty, enable=True):
+        with self._lock:
+            self._heater = p.heater(duty, enable)
+
+    def clear_heater(self):
+        with self._lock:
+            self._heater = None
+
     def queue_perform(self, glyph_mask, action, profile_id=0, value=0):
         with self._lock:
             self._direct_duties = None
@@ -105,6 +124,7 @@ class Stm32SpiLink:
     def queue_all_off(self):
         with self._lock:
             self._direct_duties = None
+            self._heater = None
             self._pending_event = (p.all_off(), -1)
 
     def _payload(self, now):
@@ -114,20 +134,28 @@ class Stm32SpiLink:
             chunks.append(p.hello(
                 heartbeat_ms=50,
                 features=(p.FEATURE_PERFORM | p.FEATURE_TEMP |
-                          p.FEATURE_HEARTBEAT),
+                          p.FEATURE_HEARTBEAT | p.FEATURE_THERMAL_PID),
             ))
         elif self._temp is not None and (now - self._temp_sent_at) >= 1.0:
             chunks.append(self._temp)
             self._temp_sent_at = now
 
+        thermal_active = (self._thermal_config is not None or
+                          self._heater is not None)
         if self._pending_event is not None:
             chunks.append(self._pending_event[0])
         elif self._direct_duties is not None:
             chunks.append(p.set_lamps(self._direct_duties))
-        elif not self._hello_pending:
+        elif not self._hello_pending and not thermal_active:
             chunks.append(p.heartbeat(
                 maix_uptime_ms=int((now - self._started) * 1000),
                 state_flags=0))
+
+        if not self._hello_pending and self._thermal_config is not None:
+            chunks.append(self._thermal_config)
+            self._thermal_config_pending = True
+        if not self._hello_pending and self._heater is not None:
+            chunks.append(self._heater)
 
         payload = b"".join(chunks)
         if len(payload) > p.MAX_PAYLOAD:
@@ -174,6 +202,10 @@ class Stm32SpiLink:
 
             self._last_status = status
             self._last_caps = caps
+            if self._thermal_config_pending:
+                # Send THERMAL_CONFIG once, not on every keepalive frame.
+                self._thermal_config = None
+                self._thermal_config_pending = False
 
             # STATUS is one transaction behind.  If the STM32 reports
             # BOOT/WAIT_HELLO/LOST/FAULT, keep sending HELLO until a

@@ -1,6 +1,6 @@
 # EnlightenJLU
 
-**语音控制的灯牌 PWM 效果**：MaixCAM 负责音频、语音判断和高层表演决策，STM32F103C8T6 负责 15 路灯牌 PWM、安全看门狗和预留的保温板加热执行。
+**语音控制的灯牌 PWM 效果**：MaixCAM 负责音频、语音判断和高层表演决策，STM32F103C8T6 负责 15 路灯牌 PWM、安全看门狗和保温板加热执行。
 
 > 当前工作树是清理后的结构。旧 Surplife BLE/HTTP 窗帘代码、旧备份、日志、截图和运行归档没有迁入；原版本仍在一代 MaixCAM Pro 设备和远端 Git 历史中。
 
@@ -225,8 +225,10 @@ st-flash --reset write stm32/firmware/PWM-Heater.bin 0x08000000
 - 500 ms 链路超时全关；
 - TEMP 接收和 STATUS 回显；
 - Python Web 控制台（80/8080）支持 13 路灯位预览、亮度、0.25×–3.0× 速度、常亮/呼吸/波浪/追逐/星光/交替/流星/心跳、场景预设和 13 路单灯调光；
-- Web 直控需要 `firmware/PWM-Heater-web.bin`（`SET_LAMPS`），HEAT1/HEAT2 固定 0%；
-- **v1 不做 PID，HEAT1/HEAT2 固定 0%**。
+- Web 直控需要 `firmware/PWM-Heater-web.bin`（`SET_LAMPS`）；
+- 温控 PID 在 `maixcam/pro/test/tools/thermal_pid.py` 命令行端运行，
+  STM32 执行 HEAT1/HEAT2，并在未配置、温度无效/过期、过温、链路丢失时强制 0%；
+- 默认 PI（Kd=0），目标 43 °C，硬上限 46 °C。
 
 ## 7. 已验证状态和限制
 
@@ -259,8 +261,9 @@ SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 2026-11-08 已完成 MaixCAM Pro 整机联调：
 
 - Web 固件 `PWM-Heater-web.bin` 已烧录并校验，SHA256
-  `b1d268529084ee431a35fbf1d862a7741d3fca3801f88621c1f97d6805e0be91`；
-- `direct_ready=true`，13 路 0–100% 亮度直控可用，HEAT 仍为 0；
+  `16bada31af9938cfcd19caa94659994119bc5b1f3667fea8adfecfad3eabc16c`；
+- `direct_ready=true`，13 路 0–100% 亮度直控可用；
+- 温控执行器已加入 `THERMAL_CONFIG` / `HEATER`，HEAT1/HEAT2 可由 PID 命令控制；
 - 软件 SPI4 采用 **100 kHz**；STM32 改为软件 NSS（单从机），解决外部 CS
   接触/片选导致的整帧超时；
 - KWS 使用 USB 麦克风 card 2，10 cm / 30 cm「哈喽」可触发，
@@ -270,6 +273,9 @@ SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
   STATUS 回传 `temp_mc`（约 49 °C，`temp_valid=true`），USART3 可观察；
 - PID 调试改用命令行 `tools/temp_monitor.py` 实时打印结温，支持
   text/CSV/JSON 和滚动 min/max/avg；Web 控制台不再作为温度调试入口；
+- 温控命令行 `tools/thermal_pid.py` 支持 dry-run、`--enable`、Kp/Ki/Kd、
+  最大占空比和过温保护；实测 HEAT 命令已下发，但当前热耦合/加热电源
+  未观察到结温响应，尚不能完成 43 °C 闭环；
 - 应用黑屏根因是 `rcS` 的 `S??*` 通配符把 `S06maixapp.*.bak` 当成启动脚本，
   多个 launcher 同时抢占 `/dev/cvi-vo`；备份已移到 `/root/surplife/init_backups`。
 
@@ -277,7 +283,9 @@ SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 
 - 13 路灯牌的实际光输出尚未现场确认（SPI 控制链和 PWM 命令已验证）；
 - ST-Link NRST 尚未接，建议后续调试补上；
-- 保温板 PID、温度闭环、过流/过温保护尚未实现；
+- 保温板温度闭环尚未完成：HEAT 执行和固件过温/超时保护已实现，但当前
+  加热器与 SG2002 结温传感器没有可观测的热耦合；
+- 过流硬件保护尚未实现；
 - 一代 Pro 权重只存在设备上；
 - 语音业务和麦克风 UI 不能同时占用 USB 麦克风；
 - 1 m 远场「哈喽」当前概率约 0.03，低于 0.12 阈值；10/30 cm 稳定；

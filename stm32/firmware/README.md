@@ -11,8 +11,8 @@
 
 | 文件 | SHA256 |
 |---|---|
-| `PWM-Heater-web.hex` | `d96cba96150fd94f0a8097b27ec11771cd0270c70fd4cc50e48849589223c6a7` |
-| `PWM-Heater-web.bin` | `b1d268529084ee431a35fbf1d862a7741d3fca3801f88621c1f97d6805e0be91` |
+| `PWM-Heater-web.hex` | `397b4b0d1167bf8e691355560ef1ea0fe5e1716725a77d7ded3942a23398df2d` |
+| `PWM-Heater-web.bin` | `16bada31af9938cfcd19caa94659994119bc5b1f3667fea8adfecfad3eabc16c` |
 
 烧录：
 
@@ -20,19 +20,24 @@
 st-flash --reset write stm32/firmware/PWM-Heater-web.bin 0x08000000
 ```
 
-2026-11-08 目标板已烧录该校验版本（17,312 B）并通过 `st-flash` 校验。
-本版在 Web 直控基础上增加了：
+2026-11-17 目标板已烧录该校验版本（18,124 B）并通过 `st-flash` 校验。
+本版在 Web 直控基础上增加了温控执行器：
 
 - SPI1 从机改为 **软件 NSS**（`SSM=1, SSI=0`）。总线上只有 STM32 一个
   从机时，外部 CS 线即使松动也不会挡住 64 字节事务；A24→PA4 的 CS 线
   仍可保留。
 - 增加 SPI 超时/首次接收诊断打印，便于用 USART3 观察：
   `[spi] timeout state=... sr=... cr1=... cr2=... idr=... rx=...`；
-- 收到合法控制帧后清除瞬时 `FAULT_SPI/CRC/FORMAT`，避免网页一直显示旧故障。
+- 收到合法控制帧后清除瞬时 `FAULT_SPI/CRC/FORMAT`，避免网页一直显示旧故障；
+- 新增 `THERMAL_CONFIG=0x30`、`HEATER=0x31`：HEAT1/HEAT2 在安全包络内
+  执行主机下发占空比；
+- STATUS 新增 `heater_duty` 和 `heater_flags`（使能/活动/过温/温度无效/已配置）；
+- 过温、温度过期、链路丢失、未配置或未使能时 HEAT 强制 0。
 
-烧录后 CAPS features 应为 `0x2F`（含 `DIRECT`）。MaixCAM Pro 侧软件 SPI4
-实测使用 **100 kHz** 最稳（200 kHz 也会偶发半帧）；网页直接亮度控制需要
-同时运行 `tools/spi_service.py --frequency 100000`。
+烧录后 CAPS features 应为 `0x3F`（含 `THERMAL_PID` 和 `DIRECT`）。MaixCAM Pro
+侧软件 SPI4 生产配置使用 **100 kHz**；温控 PID 由
+`maixcam/pro/test/tools/thermal_pid.py` 在命令行运行，STM32 只做执行器与
+安全保护。
 
 
 ## 测试扩展固件（当前目录的 PWM-Heater.hex/bin）

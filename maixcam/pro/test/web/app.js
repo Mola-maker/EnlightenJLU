@@ -37,7 +37,7 @@
   const FAULT_NAMES = [
     "CRC", "FORMAT", "SPI", "UNKNOWN_TLV", "NEED_HELLO",
     "TEMP_STALE", "TEMP_INVALID", "HEATER_UNSUPPORTED",
-    "BAD_MASK", "PROTOCOL", "LINK_LOST",
+    "BAD_MASK", "PROTOCOL", "LINK_LOST", "OVERTEMP", "THERMAL_CONFIG",
   ];
   const SCENES = {
     full: { effect: "solid", brightness: 100, target: ALL_LAMPS, speed: 1.0 },

@@ -54,10 +54,10 @@ st-flash --reset write stm32/firmware/PWM-Heater.bin 0x08000000
 | 待机呼吸 | 1%–8%，4 s 周期 |
 | GATE/HOLD/RELEASE | 30 ms 上升；保持；2.5 s 渐弱 |
 | EGG | 1.6 s 5 Hz 亮灭，再熄灭 2 s |
-| SPI v1 | HELLO/TEMP/PERFORM/SET_LAMPS/HEARTBEAT/ALL_OFF/THERMAL_CONFIG |
+| SPI v1 | HELLO/TEMP/PERFORM/SET_LAMPS/HEARTBEAT/ALL_OFF/THERMAL_CONFIG/HEATER |
 | 状态 | STATUS + CAPS，温度、链路、故障、字牌状态 |
 | 安全 | 500 ms 无合法控制帧，全部输出关闭 |
-| 加热 | v1 固定 0%，无 PID |
+| 加热 | HEATER 占空比执行器；主机 PI/PID 下发，固件有过温/超时/链路保护 |
 
 上电、未握手、`ALL_OFF`、链路超时都会让 15 路 PWM 为 0；收到 `HELLO` 后还要显式 `STANDBY` 或 `GATE` 才点灯。
 
@@ -142,3 +142,18 @@ SHA256 b1d268529084ee431a35fbf1d862a7741d3fca3801f88621c1f97d6805e0be91
 `tools/spi_service.py`；KWS 独立进程，触发后通过 GATE/RELEASE 控制
 PWM1–PWM13。网页 `fault_flags=0`、`direct_ready=true`，`last_control_seq`
 随命令递增，说明 STM32 已实际接收控制帧。
+
+### 2026-11-17 温控执行器固件
+
+```text
+firmware/PWM-Heater-web.bin
+SHA256 16bada31af9938cfcd19caa94659994119bc5b1f3667fea8adfecfad3eabc16c
+```
+
+已烧录并校验（18,124 B）。新增 `THERMAL_CONFIG=0x30` 和 `HEATER=0x31`：
+
+- 主机 PID 运行在 `maixcam/pro/test/tools/thermal_pid.py`；
+- STM32 执行 HEAT1/HEAT2 占空比，并强制最大占空比、温度过期、
+  `setpoint+margin` 过温、链路丢失等安全条件；
+- STATUS 的 `heater_duty` 和 `heater_flags` 可在命令行实时查看；
+- 默认 PI（Kd=0），因为 SG2002 结温约 1 Hz 更新，D 项会放大采样噪声。

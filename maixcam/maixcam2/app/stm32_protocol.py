@@ -23,6 +23,7 @@ TLV_PERFORM = 0x10
 TLV_SET_LAMPS = 0x11
 TLV_HEARTBEAT = 0x20
 TLV_THERMAL_CONFIG = 0x30
+TLV_HEATER = 0x31
 TLV_ALL_OFF = 0x7F
 
 TLV_STATUS = 0x81
@@ -51,6 +52,8 @@ FAULT_HEATER_UNSUPPORTED = 1 << 7
 FAULT_BAD_MASK = 1 << 8
 FAULT_PROTOCOL = 1 << 9
 FAULT_LINK_LOST = 1 << 10
+FAULT_OVERTEMP = 1 << 11
+FAULT_THERMAL_CONFIG = 1 << 12
 
 FEATURE_PERFORM = 1 << 0
 FEATURE_TEMP = 1 << 1
@@ -174,6 +177,39 @@ def set_lamps(duties) -> bytes:
                                      for d in duties)))
 
 
+def thermal_config(setpoint_mc: int, margin_mc: int,
+                   kp_x100: int = 6000, ki_x100: int = 200,
+                   kd_x100: int = 0, max_duty: int = 300,
+                   enable: bool = True) -> bytes:
+    """Configure the actuator safety envelope.
+
+    Kp/Ki/Kd are expressed as value*100; the PID itself runs on the host CLI.
+    max_duty is 0..1000 permille.
+    """
+    return tlv(TLV_THERMAL_CONFIG, struct.pack(
+        "<IIHHHHBB",
+        int(setpoint_mc) & 0xFFFFFFFF,
+        int(margin_mc) & 0xFFFFFFFF,
+        max(0, min(0xFFFF, int(kp_x100))),
+        max(0, min(0xFFFF, int(ki_x100))),
+        max(0, min(0xFFFF, int(kd_x100))),
+        max(0, min(1000, int(max_duty))),
+        1 if enable else 0,
+        0,
+    ))
+
+
+def heater(duty: int, enable: bool = True) -> bytes:
+    """Request HEAT1/HEAT2 duty in permille.  The STM32 clamps and applies
+    temperature/over-temperature safety before writing the PWM."""
+    return tlv(TLV_HEATER, struct.pack(
+        "<HBB",
+        max(0, min(1000, int(duty))),
+        1 if enable else 0,
+        0,
+    ))
+
+
 def heartbeat(maix_uptime_ms: int, state_flags: int = 0) -> bytes:
     return tlv(TLV_HEARTBEAT, struct.pack("<IHH",
                                           maix_uptime_ms & 0xFFFFFFFF,
@@ -196,7 +232,8 @@ class Status:
     temp_age_ms: int
     temp_valid: bool
     link_state: int
-    temp_sample_seq: int
+    heater_duty: int
+    heater_flags: int
     temp_source: int
     glyph_state: tuple[int, ...]
 
@@ -222,8 +259,9 @@ def parse_status(frame: bytes) -> tuple[Status, dict]:
                 temp_age_ms=fixed[6],
                 temp_valid=bool(fixed[7]),
                 link_state=fixed[8],
-                temp_sample_seq=fixed[9],
-                temp_source=fixed[10],
+                heater_duty=fixed[9] & 0x03FF,
+                heater_flags=(fixed[10] >> 1) & 0x1F,
+                temp_source=fixed[10] & 0x01,
                 glyph_state=tuple(value[29:]),
             )
         elif type_ == TLV_CAPS and len(value) == 8:

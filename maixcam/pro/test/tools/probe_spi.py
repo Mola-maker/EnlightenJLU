@@ -38,6 +38,8 @@ FAULT_NAMES = {
     8: "BAD_MASK",
     9: "PROTOCOL",
     10: "LINK_LOST",
+    11: "OVERTEMP",
+    12: "THERMAL_CONFIG",
 }
 
 

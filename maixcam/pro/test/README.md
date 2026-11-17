@@ -246,6 +246,47 @@ min/max/avg 样本数。做 PID 前先停掉 Web/KWS 服务，避免服务负载
 python3 -u tools/temp_monitor.py --interval 1
 ```
 
+### 4.1.3 温控 PID（命令行）
+
+PID 在 MaixCAM 命令行端计算，STM32 只执行 HEAT1/HEAT2 并做硬安全保护：
+
+```sh
+cd /root/surplife/test
+
+# 默认 dry-run：只打印 P/I/D，不加热
+python3 -u tools/thermal_pid.py --setpoint 43 --margin 3
+
+# 允许加热，HEAT 上限 30%
+python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
+  --enable --max-duty 300
+
+# 调参：Kp/Ki 为 permille/°C 与 permille/(°C*s)
+python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
+  --kp 60 --ki 1.0 --kd 0 --enable --max-duty 300
+```
+
+默认策略：
+
+- **PI 为主，Kd=0**：SG2002 结温约 1.048 s 更新一次，且存在量化噪声；
+  热对象时间常数长，D 项通常放大噪声，先不启用；
+- 积分负责消除 -4 °C 环境下的稳态误差，条件积分 + 输出限幅做抗饱和；
+- 目标 43 °C，`--margin 3` 建立 46 °C 硬上限；回落到 45 °C 以下才恢复；
+- 默认 `--max-duty 300`（30%），确认热响应后可提高，但不要超过硬件
+  额定功率；`--enable` 不写就是 dry-run。
+
+固件侧保护：
+
+- 未配置、未使能、温度无效/过期、`setpoint+margin` 过温、SPI 链路丢失
+  都会强制 HEAT=0；
+- STATUS 返回 `heater_duty` 和 `heater_flags`；
+- `ALL_OFF` 会关闭 HEAT 并要求重新配置。
+
+本机 2026-11-17 实测：HEAT 实际到 300‰ 和 1000‰ 时，SG2002 结温在
+18 s 内基本不动（约 27–29 °C），说明当前 HEAT1/HEAT2 与 MaixCAM 结温
+传感器没有有效热耦合，或加热电源/负载未接通。PID 代码和固件执行链
+已跑通，但要闭环保温 43 °C，必须先确认加热器实际发热并与温度探头/
+主控热耦合。
+
 ### 4.2 USB 麦克风检查
 
 USB 麦克风当前为 ALSA card 2：
@@ -317,7 +358,7 @@ PWM-Heater-test.bin
 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 
 PWM-Heater-web.bin
-b1d268529084ee431a35fbf1d862a7741d3fca3801f88621c1f97d6805e0be91
+16bada31af9938cfcd19caa94659994119bc5b1f3667fea8adfecfad3eabc16c
 ```
 
 烧录命令（在 ST-Link 所在主机上执行）：
@@ -333,7 +374,7 @@ STATUS。网页任意亮度控制还需要烧录 `PWM-Heater-web.bin`：
 st-flash --reset write firmware/PWM-Heater-web.bin 0x08000000
 ```
 
-烧录后 CAPS features 应为 `0x2F`（含 `DIRECT`），网页会隐藏“待升级”提示，
+烧录后 CAPS features 应为 `0x3F`（含 `DIRECT` 和 `THERMAL_PID`），网页会隐藏“待升级”提示，
 亮度滑杆和 13 路灯效才会直接控制真实 PWM。
 
 ## 6. 自检

@@ -47,8 +47,8 @@ HEAT2: 5V → R12/R13/R14(10Ω 并联) → Q2(AO3400A) → GND
 
 v1 不实现 PID：
 
-- HEAT1/HEAT2 固定 0%；
-- `THERMAL_CONFIG` 只置 `HEATER_UNSUPPORTED`；
+- HEAT1/HEAT2 由 `THERMAL_CONFIG`/`HEATER` 在安全包络内控制；
+- `THERMAL_CONFIG` / `HEATER` 在安全包络内控制 HEAT1/HEAT2；
 - `ALL_OFF`、500 ms 超时、HELLO 重置都会关闭输出；
 - 温度只接收并回显，不参与控制。
 

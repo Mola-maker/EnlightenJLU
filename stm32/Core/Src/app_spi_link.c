@@ -25,6 +25,7 @@
 #define TLV_SET_LAMPS             0x11U
 #define TLV_HEARTBEAT             0x20U
 #define TLV_THERMAL_CONFIG        0x30U
+#define TLV_HEATER                0x31U
 #define TLV_ALL_OFF               0x7FU
 
 #define TLV_STATUS                0x81U
@@ -48,6 +49,8 @@
 #define FAULT_BAD_MASK            (1U << 8)
 #define FAULT_PROTOCOL            (1U << 9)
 #define FAULT_LINK_LOST           (1U << 10)
+#define FAULT_OVERTEMP            (1U << 11)
+#define FAULT_THERMAL_CONFIG      (1U << 12)
 
 static uint8_t s_tx_frame[APP_SPI_FRAME_SIZE];
 static uint8_t s_rx_frame[APP_SPI_FRAME_SIZE];
@@ -82,6 +85,22 @@ static uint8_t s_temp_source;
 
 static uint32_t s_last_error_log_ms;
 
+/* Thermal actuator state.  The PID loop itself runs in the host CLI so that
+ * every term and every sample can be logged and tuned on the command line.
+ * The STM32 only enforces the hard safety envelope around the requested duty. */
+#define THERMAL_DEFAULT_SETPOINT_MC  43000
+#define THERMAL_DEFAULT_MARGIN_MC     3000
+#define THERMAL_DEFAULT_MAX_DUTY      300U
+
+static uint16_t s_heater_duty;
+static uint16_t s_heater_max_duty = THERMAL_DEFAULT_MAX_DUTY;
+static int32_t s_thermal_setpoint_mc = THERMAL_DEFAULT_SETPOINT_MC;
+static int32_t s_thermal_margin_mc = THERMAL_DEFAULT_MARGIN_MC;
+static bool s_thermal_enable;
+static bool s_heater_enabled;
+static bool s_heater_config_valid;
+static bool s_heater_overtemp;
+
 static uint16_t rd16(const uint8_t *p)
 {
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
@@ -107,6 +126,175 @@ static void wr32(uint8_t *p, uint32_t value)
     p[1] = (uint8_t)((value >> 8) & 0xFFU);
     p[2] = (uint8_t)((value >> 16) & 0xFFU);
     p[3] = (uint8_t)((value >> 24) & 0xFFU);
+}
+
+static void heater_write(uint16_t duty)
+{
+    if (duty > 1000U)
+    {
+        duty = 1000U;
+    }
+
+    s_heater_duty = duty;
+    board_pwm_set_duty(BOARD_PWM_HEAT1, duty);
+    board_pwm_set_duty(BOARD_PWM_HEAT2, duty);
+}
+
+static void heater_disable(void)
+{
+    s_thermal_enable = false;
+    s_heater_enabled = false;
+    s_heater_overtemp = false;
+    heater_write(0U);
+}
+
+static bool heater_temperature_ok(uint32_t now_ms)
+{
+    if (!s_temp_seen || !s_temp_valid)
+    {
+        return false;
+    }
+
+    uint32_t age = now_ms - s_temp_sample_tick_ms;
+    return age <= APP_SPI_TEMP_MAX_AGE_MS;
+}
+
+static uint16_t heater_flags(bool temp_ok)
+{
+    uint16_t flags = 0U;
+
+    if (s_heater_enabled)
+    {
+        flags |= 0x01U;
+    }
+    if (s_heater_duty > 0U)
+    {
+        flags |= 0x02U;
+    }
+    if (s_heater_overtemp)
+    {
+        flags |= 0x04U;
+    }
+    if (!temp_ok)
+    {
+        flags |= 0x08U;
+    }
+    if (s_heater_config_valid)
+    {
+        flags |= 0x10U;
+    }
+    return flags;
+}
+
+static void heater_safety_update(uint32_t now_ms)
+{
+    bool temp_ok = heater_temperature_ok(now_ms);
+
+    if (!s_heater_config_valid || !s_heater_enabled || !temp_ok)
+    {
+        if (s_heater_duty != 0U)
+        {
+            heater_write(0U);
+        }
+        return;
+    }
+
+    int32_t upper_mc = s_thermal_setpoint_mc + s_thermal_margin_mc;
+    if (s_temp_mc >= upper_mc)
+    {
+        s_heater_overtemp = true;
+        s_faults |= FAULT_OVERTEMP;
+        if (s_heater_duty != 0U)
+        {
+            heater_write(0U);
+        }
+        return;
+    }
+
+    if (s_heater_overtemp &&
+        s_temp_mc <= (upper_mc - 1000))
+    {
+        s_heater_overtemp = false;
+        s_faults &= (uint16_t)~FAULT_OVERTEMP;
+    }
+
+    if (s_heater_duty > s_heater_max_duty)
+    {
+        heater_write(s_heater_max_duty);
+    }
+}
+
+static void heater_request(uint16_t duty, bool enable, uint32_t now_ms)
+{
+    s_heater_enabled = enable && s_thermal_enable && s_heater_config_valid;
+    if (!s_heater_enabled)
+    {
+        heater_write(0U);
+        return;
+    }
+
+    heater_safety_update(now_ms);
+    if (s_heater_overtemp || !heater_temperature_ok(now_ms))
+    {
+        heater_write(0U);
+        return;
+    }
+
+    if (duty > s_heater_max_duty)
+    {
+        duty = s_heater_max_duty;
+    }
+    heater_write(duty);
+}
+
+static void handle_thermal_config(const uint8_t *value, uint8_t length)
+{
+    /* setpoint_mc, margin_mc, kp_x100, ki_x100, kd_x100, max_duty,
+       enable, reserved */
+    if (length != 18U)
+    {
+        s_faults |= FAULT_THERMAL_CONFIG;
+        return;
+    }
+
+    uint32_t setpoint_mc = rd32(&value[0]);
+    uint32_t margin_mc = rd32(&value[4]);
+    uint16_t kp_x100 = rd16(&value[8]);
+    uint16_t ki_x100 = rd16(&value[10]);
+    uint16_t kd_x100 = rd16(&value[12]);
+    uint16_t max_duty = rd16(&value[14]);
+    bool enable = (value[16] != 0U);
+
+    if (setpoint_mc > 100000U || margin_mc > 20000U || max_duty > 1000U)
+    {
+        s_faults |= FAULT_THERMAL_CONFIG;
+        heater_disable();
+        return;
+    }
+
+    s_thermal_setpoint_mc = (int32_t)setpoint_mc;
+    s_thermal_margin_mc = (int32_t)margin_mc;
+    s_heater_max_duty = max_duty;
+    s_heater_config_valid = true;
+    s_thermal_enable = enable;
+    s_heater_enabled = enable;
+    s_faults &= (uint16_t)~FAULT_THERMAL_CONFIG;
+
+    if (!enable)
+    {
+        heater_write(0U);
+    }
+
+    app_debug_printf(
+        "[thermal] config sp=%ldmC margin=%ldmC kp=%u ki=%u kd=%u "
+        "max=%u en=%u\r\n",
+        (long)s_thermal_setpoint_mc,
+        (long)s_thermal_margin_mc,
+        (unsigned int)kp_x100,
+        (unsigned int)ki_x100,
+        (unsigned int)kd_x100,
+        (unsigned int)s_heater_max_duty,
+        enable ? 1U : 0U);
 }
 
 static uint16_t crc16_ccitt(const uint8_t *data, uint32_t length)
@@ -189,6 +377,8 @@ static void reset_session(uint32_t session_id, uint32_t now_ms)
     s_last_event_seq = 0U;
     s_link_state = APP_SPI_LINK_WAIT_HELLO;
     s_faults &= (uint16_t)~(FAULT_NEED_HELLO | FAULT_LINK_LOST);
+    s_heater_config_valid = false;
+    heater_disable();
     app_perf_all_off();
 
     app_debug_printf("[spi] new session 0x%08lX, waiting HELLO\r\n",
@@ -211,6 +401,8 @@ static void handle_hello(const uint8_t *value, uint8_t length)
     {
         s_faults |= FAULT_PROTOCOL;
         s_link_state = APP_SPI_LINK_FAULT;
+        s_heater_config_valid = false;
+        heater_disable();
         app_perf_all_off();
         return;
     }
@@ -228,6 +420,8 @@ static void handle_hello(const uint8_t *value, uint8_t length)
     s_faults &= (uint16_t)~(FAULT_SPI | FAULT_CRC | FAULT_FORMAT |
                             FAULT_NEED_HELLO | FAULT_LINK_LOST |
                             FAULT_PROTOCOL);
+    s_heater_config_valid = false;
+    heater_disable();
     app_perf_all_off();
 
     app_debug_printf("[spi] HELLO ok, heartbeat=%ums features=0x%08lX\r\n",
@@ -393,12 +587,34 @@ static void process_tlvs(const uint8_t *payload, uint16_t payload_len,
 
         case TLV_ALL_OFF:
             app_perf_all_off();
+            heater_disable();
             app_debug_printf("[spi] ALL_OFF\r\n");
             break;
 
         case TLV_THERMAL_CONFIG:
-            /* v1 intentionally does not drive HEAT1/HEAT2. */
-            s_faults |= FAULT_HEATER_UNSUPPORTED;
+            handle_thermal_config(value, length);
+            break;
+
+        case TLV_HEATER:
+            if (length != 4U)
+            {
+                s_faults |= FAULT_FORMAT;
+            }
+            else if (!s_session_active)
+            {
+                s_need_hello = true;
+                s_faults |= FAULT_NEED_HELLO;
+            }
+            else if (!s_heater_config_valid)
+            {
+                s_faults |= FAULT_THERMAL_CONFIG;
+                heater_write(0U);
+            }
+            else
+            {
+                heater_request(rd16(&value[0]), (value[2] & 0x01U) != 0U,
+                               now_ms);
+            }
             break;
 
         default:
@@ -513,8 +729,9 @@ static void build_status_frame(uint32_t now_ms)
     wr16(&status[22], age_ms);
     status[24] = temp_valid ? 1U : 0U;
     status[25] = (uint8_t)s_link_state;
-    wr16(&status[26], s_temp_sample_seq);
-    status[28] = s_temp_source;
+    wr16(&status[26], s_heater_duty);
+    status[28] = (uint8_t)((s_temp_source & 0x01U) |
+                           (heater_flags(temp_valid) << 1));
 
     for (uint32_t i = 0; i < (uint32_t)GLYPH_COUNT; i++)
     {
@@ -529,7 +746,8 @@ static void build_status_frame(uint32_t now_ms)
     caps[2] = (uint8_t)BOARD_PWM_COUNT;
     caps[3] = 0U;
     wr32(&caps[4], FEATURE_PERFORM | FEATURE_TEMP |
-                   FEATURE_HEARTBEAT | FEATURE_EGG | FEATURE_DIRECT);
+                   FEATURE_HEARTBEAT | FEATURE_EGG | FEATURE_THERMAL_PID |
+                   FEATURE_DIRECT);
     offset = append_tlv(payload, offset, TLV_CAPS, caps, sizeof(caps));
 
     frame_begin(s_tx_frame, FRAME_TYPE_STATUS, s_tx_seq++, s_session_id, offset);
@@ -613,6 +831,14 @@ void app_spi_link_init(uint32_t now_ms)
     s_temp_valid = false;
     s_temp_source = 0xFFU;
     s_last_error_log_ms = now_ms;
+    s_heater_duty = 0U;
+    s_heater_max_duty = THERMAL_DEFAULT_MAX_DUTY;
+    s_thermal_setpoint_mc = THERMAL_DEFAULT_SETPOINT_MC;
+    s_thermal_margin_mc = THERMAL_DEFAULT_MARGIN_MC;
+    s_thermal_enable = false;
+    s_heater_enabled = false;
+    s_heater_config_valid = false;
+    s_heater_overtemp = false;
 
     s_frame_pending = false;
     s_spi_armed = false;
@@ -676,6 +902,8 @@ void app_spi_link_poll(uint32_t now_ms)
             s_rx_frame[0], s_rx_frame[1], s_rx_frame[2], s_rx_frame[3]);
     }
 
+    heater_safety_update(now_ms);
+
     if (s_rx_seen &&
         (now_ms - s_last_valid_rx_ms) > APP_SPI_LINK_TIMEOUT_MS)
     {
@@ -687,6 +915,7 @@ void app_spi_link_poll(uint32_t now_ms)
             s_link_state = APP_SPI_LINK_LOST;
             s_faults |= FAULT_LINK_LOST;
             app_perf_all_off();
+            heater_disable();
             s_last_valid_rx_ms = now_ms;
             app_debug_printf("[spi] link lost, outputs off\r\n");
         }
