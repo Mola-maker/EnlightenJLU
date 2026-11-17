@@ -253,8 +253,8 @@ void app_perf_tick(uint32_t now_ms)
             board_pwm_set_duty((board_pwm_id_t)pwm,
                                s_direct_duty[pwm]);
         }
-        board_pwm_set_duty(BOARD_PWM_HEAT1, 0U);
-        board_pwm_set_duty(BOARD_PWM_HEAT2, 0U);
+        /* HEAT1/HEAT2 are owned by the thermal actuator path, independent
+           of the lamp DIRECT mode. */
         return;
     }
 

@@ -189,6 +189,16 @@ static uint16_t heater_flags(bool temp_ok)
 static void heater_safety_update(uint32_t now_ms)
 {
     bool temp_ok = heater_temperature_ok(now_ms);
+    int32_t upper_mc = s_thermal_setpoint_mc + s_thermal_margin_mc;
+
+    /* Clear a latched over-temperature indication once the temperature is
+       safely back inside the band, even while heating is disabled. */
+    if (s_heater_overtemp && temp_ok &&
+        s_temp_mc <= (upper_mc - 1000))
+    {
+        s_heater_overtemp = false;
+        s_faults &= (uint16_t)~FAULT_OVERTEMP;
+    }
 
     if (!s_heater_config_valid || !s_heater_enabled || !temp_ok)
     {
@@ -199,7 +209,6 @@ static void heater_safety_update(uint32_t now_ms)
         return;
     }
 
-    int32_t upper_mc = s_thermal_setpoint_mc + s_thermal_margin_mc;
     if (s_temp_mc >= upper_mc)
     {
         s_heater_overtemp = true;
@@ -209,13 +218,6 @@ static void heater_safety_update(uint32_t now_ms)
             heater_write(0U);
         }
         return;
-    }
-
-    if (s_heater_overtemp &&
-        s_temp_mc <= (upper_mc - 1000))
-    {
-        s_heater_overtemp = false;
-        s_faults &= (uint16_t)~FAULT_OVERTEMP;
     }
 
     if (s_heater_duty > s_heater_max_duty)

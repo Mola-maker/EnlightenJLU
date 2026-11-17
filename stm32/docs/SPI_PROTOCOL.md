@@ -367,7 +367,7 @@ GLYPH_ALL_LAMPS (bit 2, "全灯") -> 测试扩展：聚合 PWM1..PWM13
 - “全灯”测试逻辑字牌（bit 2）→ PWM1–PWM13，排除 HEAT
 - 15 路 PWM 全部初始化为 0
 - web 固件支持 `SET_LAMPS`，可独立设置 PWM1–PWM13 的 0..1000‰ 亮度
-- DIRECT 灯效模式下 HEAT1/HEAT2 仍强制 0%；温控使用独立 `HEATER` TLV
+- DIRECT 灯效与 HEAT 独立；HEAT 使用独立 `HEATER` TLV 和温控安全包络
 - 仅接收温度并在 STATUS 回显，不做 PID
 - SPI 超时 500 ms，超时后全部输出关闭
 - 收到 HELLO 后仍需显式 STANDBY/GATE 才点灯

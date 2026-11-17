@@ -6,13 +6,13 @@
 
 - `SET_LAMPS = 0x11`：13 个 u16 亮度值，直接设置 PWM1–PWM13；
 - CAPS feature bit 5 `DIRECT = 1`；
-- DIRECT 模式下 HEAT1/HEAT2 仍固定 0%；
+- DIRECT 灯效与 HEAT 独立，HEAT 只由 `THERMAL_CONFIG`/`HEATER` 控制；
 - PERFORM / ALL_OFF 会退出 DIRECT 模式。
 
 | 文件 | SHA256 |
 |---|---|
-| `PWM-Heater-web.hex` | `397b4b0d1167bf8e691355560ef1ea0fe5e1716725a77d7ded3942a23398df2d` |
-| `PWM-Heater-web.bin` | `16bada31af9938cfcd19caa94659994119bc5b1f3667fea8adfecfad3eabc16c` |
+| `PWM-Heater-web.hex` | `0dee429b31e58d12d01b1a73e782ebc472e9c73fe93e6e326fbc86aac5a7f8e0` |
+| `PWM-Heater-web.bin` | `4b5cd2eeb31c186e9b9743a252ab6d41e7af2bd6326cbd6c66cd83a09485fc59` |
 
 烧录：
 
@@ -20,7 +20,7 @@
 st-flash --reset write stm32/firmware/PWM-Heater-web.bin 0x08000000
 ```
 
-2026-11-17 目标板已烧录该校验版本（18,124 B）并通过 `st-flash` 校验。
+2026-11-17 目标板已烧录该校验版本（18,108 B）并通过 `st-flash` 校验。
 本版在 Web 直控基础上增加了温控执行器：
 
 - SPI1 从机改为 **软件 NSS**（`SSM=1, SSI=0`）。总线上只有 STM32 一个

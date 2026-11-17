@@ -224,7 +224,7 @@ st-flash --reset write stm32/firmware/PWM-Heater.bin 0x08000000
 - SPI v1 固定 64 字节帧、TLV、CRC16、会话/序号去重；
 - 500 ms 链路超时全关；
 - TEMP 接收和 STATUS 回显；
-- Python Web 控制台（80/8080）支持 13 路灯位预览、亮度、0.25×–3.0× 速度、常亮/呼吸/波浪/追逐/星光/交替/流星/心跳、场景预设和 13 路单灯调光；
+- Python Web 控制台（80/8080）改为聚焦波形监测：13 路灯牌热力波形 + 关键词状态；温度/HEAT duty 双曲线 + PID 锚点/环境温度/裕度；不再提供冗余预设动作；
 - Web 直控需要 `firmware/PWM-Heater-web.bin`（`SET_LAMPS`）；
 - 温控 PID 在 `maixcam/pro/test/tools/thermal_pid.py` 命令行端运行，
   STM32 执行 HEAT1/HEAT2，并在未配置、温度无效/过期、过温、链路丢失时强制 0%；
@@ -261,7 +261,7 @@ SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 2026-11-08 已完成 MaixCAM Pro 整机联调：
 
 - Web 固件 `PWM-Heater-web.bin` 已烧录并校验，SHA256
-  `16bada31af9938cfcd19caa94659994119bc5b1f3667fea8adfecfad3eabc16c`；
+  `4b5cd2eeb31c186e9b9743a252ab6d41e7af2bd6326cbd6c66cd83a09485fc59`；
 - `direct_ready=true`，13 路 0–100% 亮度直控可用；
 - 温控执行器已加入 `THERMAL_CONFIG` / `HEATER`，HEAT1/HEAT2 可由 PID 命令控制；
 - 软件 SPI4 采用 **100 kHz**；STM32 改为软件 NSS（单从机），解决外部 CS

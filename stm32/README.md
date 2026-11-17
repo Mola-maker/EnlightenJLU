@@ -136,7 +136,7 @@ SHA256 b1d268529084ee431a35fbf1d862a7741d3fca3801f88621c1f97d6805e0be91
 - `SET_LAMPS=0x11`，13 路独立 0–1000 亮度；
 - `FEATURE_DIRECT`，MaixCAM Web UI 的亮度滑杆直接控制真实 PWM；
 - 软件 NSS 和 SPI 诊断打印；
-- HEAT1/HEAT2 在 DIRECT 模式仍强制 0%。
+- HEAT1/HEAT2 与灯牌 DIRECT 模式独立，由热控安全包络单独控制。
 
 整机验证使用 MaixCAM Pro `/dev/spidev4.0`、**100 kHz**、DMA 关断的
 `tools/spi_service.py`；KWS 独立进程，触发后通过 GATE/RELEASE 控制
@@ -147,10 +147,10 @@ PWM1–PWM13。网页 `fault_flags=0`、`direct_ready=true`，`last_control_seq`
 
 ```text
 firmware/PWM-Heater-web.bin
-SHA256 16bada31af9938cfcd19caa94659994119bc5b1f3667fea8adfecfad3eabc16c
+SHA256 4b5cd2eeb31c186e9b9743a252ab6d41e7af2bd6326cbd6c66cd83a09485fc59
 ```
 
-已烧录并校验（18,124 B）。新增 `THERMAL_CONFIG=0x30` 和 `HEATER=0x31`：
+已烧录并校验（18,108 B）。新增 `THERMAL_CONFIG=0x30` 和 `HEATER=0x31`：
 
 - 主机 PID 运行在 `maixcam/pro/test/tools/thermal_pid.py`；
 - STM32 执行 HEAT1/HEAT2 占空比，并强制最大占空比、温度过期、

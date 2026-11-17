@@ -109,7 +109,7 @@ GATE/HOLD，再执行 RELEASE，最后回到待机呼吸。
 
 ```sh
 cd /root/surplife/test
-nohup sh -c 'python3 -u main.py --no-spi 2>&1 |
+nohup sh -c 'python3 -u main.py --no-spi --debug-kws 2>&1 |
   tee /root/surplife/run/kws_live.log |
   python3 -u tools/spi_service.py --hold 1.2 --frequency 100000 --web-port 80' \
   </dev/null >/root/surplife/run/spi_live.log 2>&1 &
@@ -121,29 +121,42 @@ Web 控制台：
 http://192.168.43.229/
 ```
 
-服务优先监听 80；如果 80 已占用会自动使用 8080。网页包含 13 路灯位预览、
-整体亮度、0.25×–3.0× 速度、常亮/呼吸/波浪/追逐/星光/交替/流星/心跳、
-目标灯组、场景预设、单灯 13 路独立调光、关键词待机、固件预设特效，以及
-SPI 链路、故障位、控制序号和 SG2002 结温，适配手机端。
+服务优先监听 80；如果 80 已占用会自动使用 8080。新版页面以
+`html_20261113_a00bec.html` 的浅色卡片/侧栏/曲线风格为标杆，去掉了
+场景预设、固件预设、单灯调光等冗余动作，只保留两个焦点：
 
-亮度滑杆和单灯调光需要先烧录 `PWM-Heater-web.bin`；未烧录时页面会显示
-“待升级”，只更新浏览器预览，不覆盖 STM32 的待机呼吸。单灯面板使用
-`manual` 命令把 13 个 0–1000 duty 直接写入 `SET_LAMPS`。
+1. **灯牌波形 + 关键词状态**：13 路 PWM 热力波形、当前波形、
+   关键词监听/触发/未接入状态、最后一次关键词和 hello/welcome 分数；
+2. **加热波形 + PID 锚点**：温度/HEAT duty 双曲线、40–46 °C 目标带、
+   环境温度 −4 °C、锚定结温 21 °C、setpoint 43 °C、裕度 ±3 °C，
+   以及 Kp/Ki/Kd/max duty 和 P/I/D 实时项。
 
-网页控制 API 示例：
+页面只保留灯效波形选择、整体亮度、关键词待机和加热使能/PID 参数应用；
+不再提供预设动作按钮。
 
-```sh
-curl -X POST http://192.168.43.229/api/command \
-  -H 'Content-Type: application/json' \
-  -d '{"command":"effect","effect":"comet","target":8191,"brightness":80,"speed":1.5}'
+接口：
 
-curl -X POST http://192.168.43.229/api/command \
-  -H 'Content-Type: application/json' \
-  -d '{"command":"manual","duties":[1000,0,900,0,800,0,700,0,600,0,500,0,400],"speed":1.0}'
+```text
+GET  /api/state      lamp / kws / thermal / link 当前状态
+GET  /api/history    lamp 12 s 波形 + thermal 5 min 波形
+POST /api/lamp       effect / kws / off
+POST /api/thermal    setpoint/margin/ambient/anchor/Kp/Ki/Kd/max/enabled
 ```
 
-`GET /api/state` 返回 `speed`、`manual_duties`、`temp_mc`、`temp_valid` 和
-`fault_flags`；`GET /api/stream` 为 SSE 实时状态。
+示例：
+
+```sh
+curl -X POST http://192.168.43.229/api/lamp \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"effect","effect":"comet","target":8191,"brightness":80}'
+
+curl -X POST http://192.168.43.229/api/thermal \
+  -H 'Content-Type: application/json' \
+  -d '{"setpoint_c":43,"margin_c":3,"ambient_c":-4,"anchor_c":21,"kp":60,"ki":1,"kd":0,"max_duty":300,"enabled":false}'
+```
+
+默认加热是关闭的；勾选页面“加热使能”或 POST `enabled:true` 才会实际
+下发 HEAT。未接入 USB 麦克风时页面会显示“KWS 未接入”，不会伪造监听状态。
 
 设备已安装 `/etc/init.d/S99surplife`，开机自动切换 USB host、等待 USB
 麦克风，然后启动 KWS + Web + SPI 服务；没有麦克风时退化为 Web-only。
@@ -358,7 +371,7 @@ PWM-Heater-test.bin
 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 
 PWM-Heater-web.bin
-16bada31af9938cfcd19caa94659994119bc5b1f3667fea8adfecfad3eabc16c
+4b5cd2eeb31c186e9b9743a252ab6d41e7af2bd6326cbd6c66cd83a09485fc59
 ```
 
 烧录命令（在 ST-Link 所在主机上执行）：

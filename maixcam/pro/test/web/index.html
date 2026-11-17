@@ -1,219 +1,227 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#080b12">
-  <title>JLU Lamp Lab · 13路灯牌控制</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261108b">
+  <meta name="theme-color" content="#f3f5f8">
+  <title>JLU · 灯牌与温控</title>
+  <link rel="stylesheet" href="/static/style.css?v=20261117a">
 </head>
 <body>
-  <div class="ambient ambient-a"></div>
-  <div class="ambient ambient-b"></div>
-  <main class="app">
-    <header class="topbar">
-      <div class="brand">
-        <div class="brand-mark" aria-hidden="true">
-          <span></span><span></span><span></span>
+  <div class="app">
+    <aside class="rail">
+      <div class="brand">JLU<i></i></div>
+      <p class="rail-label">LOCAL CONSOLE</p>
+      <nav class="mode-list" aria-label="页面导航">
+        <button class="mode is-active" type="button" data-scroll="lampCard"><span>01</span>灯牌波形</button>
+        <button class="mode" type="button" data-scroll="heatCard"><span>02</span>加热波形</button>
+        <button class="mode" type="button" data-scroll="pidCard"><span>03</span>PID 锚点</button>
+        <button class="mode" type="button" data-scroll="kwsCard"><span>04</span>关键词识别</button>
+      </nav>
+      <div class="rail-bottom">
+        <div class="rail-state"><i class="dot" id="railDot"></i><span id="railLink">连接中</span></div>
+        <div class="rail-meta">MaixCAM Pro · STM32</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <span class="mobile-brand">JLU</span>
+        <div class="connection-badge">
+          <i class="dot" id="connectionDot"></i>
+          <span id="connectionText">连接中</span>
         </div>
+        <div class="top-actions">
+          <button class="icon-button" id="refreshButton" type="button" title="刷新" aria-label="刷新">↻</button>
+          <button class="icon-button" id="themeButton" type="button" title="主题" aria-label="切换主题">◐</button>
+        </div>
+      </header>
+
+      <div class="page-heading">
         <div>
-          <p class="eyebrow">JLU · LAMP CONTROL</p>
-          <h1>灯牌实验室</h1>
+          <p class="eyebrow">MAIXCAM · STM32 TELEMETRY</p>
+          <h1>灯牌与温控</h1>
         </div>
-      </div>
-      <div class="top-status">
-        <div id="connection" class="status-pill offline">
-          <span class="dot"></span><span id="connectionText">连接中</span>
-        </div>
-        <div class="status-pill subtle" id="modePill">KWS 待机</div>
-      </div>
-    </header>
-
-    <section class="hero panel">
-      <div class="hero-copy">
-        <p class="eyebrow">13 CHANNEL PWM</p>
-        <h2 id="heroTitle">呼吸，正在发生。</h2>
-        <p class="hero-sub" id="heroSub">PWM1–PWM13 已接入。HEAT1 / HEAT2 始终保持关闭。</p>
-        <div class="hero-meta">
-          <span class="meta-item"><i class="meta-dot live"></i><span id="linkText">等待链路</span></span>
-          <span class="meta-item"><span id="fpsText">20 Hz</span> 总线</span>
-          <span class="meta-item" id="tempReadout">结温 —</span>
-          <span class="meta-item" id="brightnessReadout">75% 亮度</span>
+        <div class="heading-right">
+          <span class="save-badge" id="updatedAt"><i></i>实时</span>
         </div>
       </div>
 
-      <div class="lamp-stage" aria-label="13路灯牌预览">
-        <div class="stage-aura"></div>
-        <div id="lampStage" class="lamp-row"></div>
-        <div class="stage-caption">
-          <span>PWM 01</span><span>·</span><span>PWM 13</span>
-        </div>
-      </div>
-    </section>
-
-    <div class="layout">
-      <section class="panel control-panel">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">LIVE CONTROL</p>
-            <h3>灯光控制</h3>
+      <section class="workspace">
+        <article class="card lamp-card" id="lampCard">
+          <div class="card-heading">
+            <div>
+              <h2>灯牌波形</h2>
+              <p class="card-sub">PWM1–PWM13 · 实际占空比</p>
+            </div>
+            <div class="card-tools">
+              <select id="effectSelect" aria-label="灯牌波形">
+                <option value="breath">呼吸</option>
+                <option value="solid">常亮</option>
+                <option value="wave">波浪</option>
+                <option value="chase">追逐</option>
+                <option value="sparkle">星光</option>
+                <option value="theater">交替</option>
+                <option value="comet">流星</option>
+                <option value="pulse">心跳</option>
+              </select>
+              <button class="mini-button" id="kwsButton" type="button">关键词待机</button>
+            </div>
           </div>
-          <span class="live-chip"><span></span>实时</span>
-        </div>
 
-        <div class="slider-block">
-          <div class="row-between">
+          <div class="lamp-overview">
+            <div class="lamp-bars" id="lampBars" aria-label="13 路当前亮度"></div>
+            <div class="lamp-summary">
+              <span class="eyebrow">CURRENT SHAPE</span>
+              <strong id="effectLabel">呼吸</strong>
+              <p id="lampState">等待数据</p>
+            </div>
+          </div>
+
+          <div class="lamp-brightness">
             <label for="brightness">整体亮度</label>
+            <input id="brightness" type="range" min="0" max="100" step="1" value="75">
             <output id="brightnessValue" for="brightness">75%</output>
           </div>
-          <input id="brightness" class="range" type="range" min="0" max="100" step="1" value="75">
-          <div class="range-labels"><span>关闭</span><span>柔和</span><span>全亮</span></div>
-        </div>
 
-        <div class="slider-block speed-block">
-          <div class="row-between">
-            <label for="speed">灯效速度</label>
-            <output id="speedValue" for="speed">1.0×</output>
+          <div class="chart-shell">
+            <div class="legend">
+              <span><i class="legend-lamp"></i>13 路 PWM</span>
+              <span class="legend-soft">青色标记：关键词 GATE</span>
+              <span class="chart-window">−10 s</span>
+            </div>
+            <canvas id="lampCanvas" role="img" aria-label="13 路灯牌占空比波形"></canvas>
           </div>
-          <input id="speed" class="range speed-range" type="range" min="25" max="300" step="5" value="100">
-          <div class="range-labels"><span>慢</span><span>标准</span><span>快</span></div>
-        </div>
+          <div class="card-foot">
+            <span id="lampMeta">PWM1–PWM13 · HEAT 不参与</span>
+            <span id="lampSeq">seq —</span>
+          </div>
+        </article>
 
-        <div class="control-group">
-          <div class="row-between">
-            <span class="group-label">目标灯组</span>
-            <span class="hint" id="targetHint">全部 13 路</span>
+        <article class="card heat-card" id="heatCard">
+          <div class="card-heading">
+            <div>
+              <h2>加热波形</h2>
+              <p class="card-sub">SG2002 结温 · HEAT1/HEAT2</p>
+            </div>
+            <label class="power-toggle">
+              <input id="heaterEnable" type="checkbox">
+              <i class="switch-track"></i>
+              <span>加热使能</span>
+            </label>
           </div>
-          <div class="segmented" id="targetPresets">
-            <button type="button" class="seg is-active" data-target="8191">全灯</button>
-            <button type="button" class="seg" data-target="1">长</button>
-            <button type="button" class="seg" data-target="2">春</button>
-            <button type="button" class="seg" data-target="custom">自定义</button>
-          </div>
-        </div>
 
-        <div class="control-group">
-          <div class="row-between">
-            <span class="group-label">动态灯效</span>
-            <span class="hint">实时下发 STM32 · 平滑预览</span>
+          <div class="heat-stats">
+            <div>
+              <span>当前结温</span>
+              <strong id="tempNow">—</strong><small>°C</small>
+            </div>
+            <div>
+              <span>目标 / 裕度</span>
+              <strong id="targetNow">43 / ±3</strong><small>°C</small>
+            </div>
+            <div>
+              <span>HEAT 输出</span>
+              <strong id="dutyNow">0</strong><small>‰</small>
+            </div>
           </div>
-          <div class="effect-grid" id="effectGrid">
-            <button type="button" class="effect-card" data-effect="solid">
-              <span class="effect-icon icon-sun"></span>
-              <strong>常亮</strong><small>稳定输出</small>
-            </button>
-            <button type="button" class="effect-card is-active" data-effect="breath">
-              <span class="effect-icon icon-breath"></span>
-              <strong>呼吸</strong><small>4 秒周期</small>
-            </button>
-            <button type="button" class="effect-card" data-effect="wave">
-              <span class="effect-icon icon-wave"></span>
-              <strong>波浪</strong><small>逐灯起伏</small>
-            </button>
-            <button type="button" class="effect-card" data-effect="chase">
-              <span class="effect-icon icon-chase"></span>
-              <strong>追逐</strong><small>单灯游走</small>
-            </button>
-            <button type="button" class="effect-card" data-effect="sparkle">
-              <span class="effect-icon icon-sparkle"></span>
-              <strong>星光</strong><small>柔和闪烁</small>
-            </button>
-            <button type="button" class="effect-card" data-effect="theater">
-              <span class="effect-icon icon-theater"></span>
-              <strong>交替</strong><small>奇偶灯交叠</small>
-            </button>
-            <button type="button" class="effect-card" data-effect="comet">
-              <span class="effect-icon icon-comet"></span>
-              <strong>流星</strong><small>拖尾游走</small>
-            </button>
-            <button type="button" class="effect-card" data-effect="pulse">
-              <span class="effect-icon icon-pulse"></span>
-              <strong>心跳</strong><small>双拍脉冲</small>
-            </button>
-          </div>
-        </div>
 
-        <div class="control-group">
-          <div class="row-between">
-            <span class="group-label">场景预设</span>
-            <span class="hint">一键切换氛围</span>
+          <div class="chart-shell">
+            <div class="legend">
+              <span><i class="legend-temp"></i>结温</span>
+              <span><i class="legend-duty"></i>HEAT duty</span>
+              <span><i class="legend-band"></i>目标带</span>
+              <span class="chart-window">−60 s</span>
+            </div>
+            <canvas id="heatCanvas" role="img" aria-label="温度和加热占空比波形"></canvas>
           </div>
-          <div class="scene-strip" id="scenePresets">
-            <button type="button" class="scene-btn" data-scene="full">全亮</button>
-            <button type="button" class="scene-btn" data-scene="soft">柔光</button>
-            <button type="button" class="scene-btn" data-scene="breath">呼吸</button>
-            <button type="button" class="scene-btn" data-scene="comet">流星</button>
-            <button type="button" class="scene-btn" data-scene="long">长字</button>
-            <button type="button" class="scene-btn" data-scene="spring">春字</button>
+          <div class="card-foot">
+            <span id="heatState">未使能</span>
+            <span id="tempAge">温度 —</span>
           </div>
-        </div>
+        </article>
 
-        <div class="quick-actions">
-          <button type="button" class="btn btn-ghost" id="kwsButton">
-            <span class="btn-icon">⌁</span>恢复关键词待机
-          </button>
-          <button type="button" class="btn btn-danger-soft" id="offButton">
-            <span class="btn-icon">◌</span>全部关闭
-          </button>
-        </div>
+        <article class="card kws-card" id="kwsCard">
+          <div class="card-heading">
+            <div>
+              <h2>关键词识别</h2>
+              <p class="card-sub">Mandarin KWS · ha1 lou2 / wei1 er2 kang1</p>
+            </div>
+            <span class="status-pill" id="kwsPill">等待数据</span>
+          </div>
+          <div class="kws-main">
+            <div class="kws-mark"><span></span><span></span><span></span></div>
+            <div>
+              <strong id="kwsKeyword">等待关键词</strong>
+              <p id="kwsDetail">尚未收到 KWS 触发</p>
+            </div>
+          </div>
+          <div class="score-list">
+            <div class="score-row">
+              <span>哈喽 · ha1 lou2</span>
+              <div class="score-track"><i id="helloScore"></i></div>
+              <b id="helloScoreText">0.000</b>
+            </div>
+            <div class="score-row">
+              <span>威尔康 · wei1 er2 kang1</span>
+              <div class="score-track"><i id="welcomeScore"></i></div>
+              <b id="welcomeScoreText">0.000</b>
+            </div>
+          </div>
+          <div class="card-foot">
+            <span id="kwsCount">触发 0 次</span>
+            <span id="kwsLast">—</span>
+          </div>
+        </article>
+
+        <article class="card pid-card" id="pidCard">
+          <div class="card-heading">
+            <div>
+              <h2>PID 锚点</h2>
+              <p class="card-sub">环境温度 / 锚定结温 / 目标裕度</p>
+            </div>
+            <span class="small-status" id="pidStatus">未使能</span>
+          </div>
+
+          <div class="anchor-grid">
+            <div><span>环境温度</span><strong id="ambientShown">−4.0 °C</strong></div>
+            <div><span>锚定结温</span><strong id="anchorShown">21.0 °C</strong></div>
+            <div><span>目标结温</span><strong id="setpointShown">43.0 °C</strong></div>
+            <div><span>允许裕度</span><strong id="marginShown">±3.0 °C</strong></div>
+          </div>
+
+          <form id="pidForm" class="pid-form">
+            <label>Setpoint °C<input id="setpointInput" type="number" step="0.1" min="0" max="100"></label>
+            <label>Margin ±°C<input id="marginInput" type="number" step="0.1" min="0" max="20"></label>
+            <label>Ambient °C<input id="ambientInput" type="number" step="0.1" min="-40" max="60"></label>
+            <label>Anchor °C<input id="anchorInput" type="number" step="0.1" min="-40" max="100"></label>
+            <label>Kp<input id="kpInput" type="number" step="1" min="0" max="500"></label>
+            <label>Ki<input id="kiInput" type="number" step="0.1" min="0" max="100"></label>
+            <label>Kd<input id="kdInput" type="number" step="0.1" min="0" max="50"></label>
+            <label>Max ‰<input id="maxInput" type="number" step="10" min="0" max="1000"></label>
+          </form>
+
+          <div class="pid-terms">
+            <span>P <b id="pTerm">0.0</b></span>
+            <span>I <b id="iTerm">0.0</b></span>
+            <span>D <b id="dTerm">0.0</b></span>
+            <span>斜率 <b id="slopeTerm">—</b></span>
+          </div>
+          <div class="pid-footer">
+            <span id="pidNote">应用参数后才会改变锚点。</span>
+            <button class="primary-button" id="applyPid" type="button">应用参数</button>
+          </div>
+        </article>
       </section>
 
-      <aside class="panel side-panel">
-        <div class="section-head compact">
-          <div>
-            <p class="eyebrow">CHANNEL MAP</p>
-            <h3>灯位选择</h3>
-          </div>
-          <button type="button" class="text-button" id="selectAll">全选</button>
-        </div>
-        <p class="side-note">点按灯位切换目标。青蓝色为已选，暖金色为当前亮度。</p>
-        <div id="channelGrid" class="channel-grid"></div>
-
-        <details class="manual-card" id="manualCard">
-          <summary>单灯调光 <span>13 路独立亮度</span></summary>
-          <p>拖动每一路 PWM 的亮度，使用固件 SET_LAMPS 直接下发。适合修字、补光和逐灯校准。</p>
-          <div id="manualGrid" class="manual-grid"></div>
-          <div class="manual-actions">
-            <button type="button" class="mini-btn" id="manualApply">应用单灯亮度</button>
-            <span id="manualHint">0–100% · HEAT 不参与</span>
-          </div>
-        </details>
-
-        <div class="health-card">
-          <div class="health-row"><span>SPI 链路</span><strong id="linkValue">—</strong></div>
-          <div class="health-row"><span>活动掩码</span><strong id="maskValue">—</strong></div>
-          <div class="health-row"><span>事件序号</span><strong id="eventValue">—</strong></div>
-          <div class="health-row"><span>主控结温</span><strong id="tempValue">—</strong></div>
-          <div class="health-row"><span>控制序号</span><strong id="seqValue">—</strong></div>
-          <div class="health-row"><span>固件直控</span><strong id="directValue">—</strong></div>
-          <div class="health-row"><span>故障位</span><strong id="faultValue">—</strong></div>
-        </div>
-
-        <details class="firmware-card">
-          <summary>固件预设特效 <span>可选</span></summary>
-          <p>使用 STM32 内置曲线，适合对照验证。切回“关键词待机”可继续语音业务。</p>
-          <div class="firmware-grid">
-            <button type="button" class="mini-btn" data-firmware="standby">待机</button>
-            <button type="button" class="mini-btn" data-firmware="gate">全亮</button>
-            <button type="button" class="mini-btn" data-firmware="release">渐弱</button>
-            <button type="button" class="mini-btn" data-firmware="egg">彩蛋</button>
-          </div>
-        </details>
-      </aside>
-    </div>
-
-    <div id="directNote" class="notice hidden">
-      <span class="notice-icon">!</span>
-      <span>当前 STM32 固件还没有直控亮度命令。网页会保留预览；烧录 web 固件后即可控制真实 0–100% 亮度。</span>
-    </div>
-
-    <footer class="footer">
-      <span>JLU Lamp Lab</span>
-      <span>PWM1–PWM13 · 100 kHz · HEAT 锁定关闭</span>
-    </footer>
-  </main>
+      <footer class="footer">
+        <span>JLU Lamp + Thermal Console</span>
+        <span id="footerState">等待设备状态</span>
+      </footer>
+    </main>
+  </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.js?v=20261108b"></script>
+  <script src="/static/app.js?v=20261117a"></script>
 </body>
 </html>

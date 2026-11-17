@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""SPI owner and web control service for the 13-lamp test.
+"""SPI owner and local lamp/thermal console service.
 
 The KWS model runs in a separate process because it can starve the bit-banged
 SPI4 bus.  This process reads KWS log lines from stdin, owns the STM32 SPI
-link, and serves a small responsive web UI on port 80 (or 8080 if 80 is
-busy).  HEAT1/HEAT2 are never included in any commanded lamp mask.
+link, runs the PI/PID heater loop at 1 Hz, and exposes the focused local
+waveform console on port 80 (or 8080 if 80 is busy).
+
+The web page is intentionally not the old preset/effect panel.  It shows:
+  * the lamp duty waveform and keyword-recognition state;
+  * the heater temperature/duty waveform, PID terms, ambient/anchor context
+    and target band.
 """
 from __future__ import annotations
 
@@ -17,6 +22,7 @@ import socket
 import sys
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 TEST_DIR = Path(__file__).resolve().parents[1]
@@ -31,14 +37,18 @@ from spi4_bootstrap import (  # noqa: E402
     ensure_spi4_device,
 )
 from spi_link import Stm32SpiLink, SpiTransactionError  # noqa: E402
-from web_control import LampController, create_app  # noqa: E402
+from thermal_control import ThermalController  # noqa: E402
+from web_control import LampController  # noqa: E402
+from console_web import create_console_app  # noqa: E402
 
 try:
     from sg2002_temp import sample as read_temperature  # noqa: E402
 except Exception:  # pragma: no cover - optional on a bare host
     read_temperature = None
 
-TRIGGER_RE = re.compile(r"GATE mask=0x([0-9A-Fa-f]+)")
+TRIGGER_RE = re.compile(r"TRIGGER\s+(\w+).*?p=([0-9.]+)")
+SCORE_RE = re.compile(
+    r"KWS scores hello=([-0-9.]+)\s+welcome=([-0-9.]+)")
 WEB_DIR = TEST_DIR / "web"
 
 
@@ -59,11 +69,12 @@ def available_port(preferred):
     raise RuntimeError("ports 80 and 8080 are both in use")
 
 
-def start_web(controller, preferred):
+def start_web(state_fn, history_fn, lamp, thermal, preferred):
     from werkzeug.serving import make_server
 
     port = available_port(preferred)
-    app = create_app(controller, WEB_DIR, port)
+    app = create_console_app(
+        state_fn, history_fn, lamp, thermal, WEB_DIR, port)
     server = make_server("0.0.0.0", port, app, threaded=True)
 
     def serve():
@@ -75,7 +86,8 @@ def start_web(controller, preferred):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="STM32 13-lamp SPI service")
+    parser = argparse.ArgumentParser(
+        description="STM32 lamp + thermal console service")
     parser.add_argument("--hold", type=float, default=1.2)
     parser.add_argument("--mask", type=lambda x: int(x, 0), default=4)
     parser.add_argument("--frequency", type=int, default=100_000)
@@ -92,9 +104,75 @@ def main():
         retries=5, retry_delay=0.1, settle_time=0.5,
     )
     controller = LampController(link, hold_seconds=args.hold)
+    thermal = ThermalController(link)
+
+    lamp_history = deque(maxlen=240)       # 12 s at 20 Hz
+    thermal_history_max = 300
+    kws = {
+        "state": "starting",
+        "seen": False,
+        "last_keyword": None,
+        "last_probability": None,
+        "last_trigger_at": None,
+        "trigger_count": 0,
+        "scores": {"hello": 0.0, "welcome": 0.0},
+        "message": "",
+    }
+
+    def lamp_snapshot():
+        snap = controller.snapshot()
+        return {
+            "mode": snap["mode"],
+            "effect": snap["effect"],
+            "brightness": snap["brightness"],
+            "target": snap["target"],
+            "duties": list(snap["duties"]),
+            "active_mask": snap["active_mask"],
+            "glyph_state": list(snap["glyph_state"]),
+            "link_state": snap["link_state"],
+            "fault_flags": snap["fault_flags"],
+            "last_event_seq": snap["last_event_seq"],
+            "last_control_seq": snap["last_control_seq"],
+            "direct_ready": snap["direct_ready"],
+            "message": snap["message"],
+        }
+
+    def state_fn():
+        now = time.monotonic()
+        snap = controller.snapshot()
+        if not kws["seen"]:
+            kws["state"] = "unavailable"
+        elif snap["mode"] != "kws":
+            kws["state"] = "paused"
+        elif controller.gate_until and now < controller.gate_until:
+            kws["state"] = "trigger"
+        else:
+            kws["state"] = "listening"
+        return {
+            "schema": 2,
+            "timestamp": time.time(),
+            "link": {
+                "state": snap["link_state"],
+                "fault_flags": snap["fault_flags"],
+                "caps": snap.get("caps", {}),
+                "last_control_seq": snap["last_control_seq"],
+            },
+            "lamp": lamp_snapshot(),
+            "kws": dict(kws),
+            "thermal": thermal.snapshot(),
+        }
+
+    def history_fn():
+        return {
+            "lamp": list(lamp_history),
+            "thermal": list(thermal.history)[-thermal_history_max:],
+        }
+
     web_server = None
+    web_port = None
     if not args.no_web:
-        web_server, web_port = start_web(controller, args.web_port)
+        web_server, web_port = start_web(
+            state_fn, history_fn, controller, thermal, args.web_port)
 
     stop = False
 
@@ -109,6 +187,8 @@ def main():
     buffered = b""
     last_log = 0.0
     last_temp = 0.0
+    last_lamp_sample = 0.0
+    last_link_state = None
     temp_seq = 0
 
     try:
@@ -127,6 +207,7 @@ def main():
         else:
             raise RuntimeError("STM32 link did not become ACTIVE")
 
+        thermal.ensure_link_config()
         print(
             "ready "
             f"web={'off' if args.no_web else web_port} "
@@ -145,10 +226,21 @@ def main():
                     while b"\n" in buffered:
                         line, buffered = buffered.split(b"\n", 1)
                         text = line.decode("utf-8", "replace")
+                        if "KWS" in text or "TRIGGER" in text:
+                            kws["seen"] = True
                         match = TRIGGER_RE.search(text)
                         if match:
+                            kws["state"] = "trigger"
+                            kws["last_keyword"] = match.group(1)
+                            kws["last_probability"] = float(match.group(2))
+                            kws["last_trigger_at"] = time.time()
+                            kws["trigger_count"] += 1
                             controller.on_kws_trigger()
                             print("KWS TRIGGER", flush=True)
+                        score = SCORE_RE.search(text)
+                        if score:
+                            kws["scores"]["hello"] = float(score.group(1))
+                            kws["scores"]["welcome"] = float(score.group(2))
 
             now = time.monotonic()
             if read_temperature is not None and now - last_temp >= 1.0:
@@ -159,9 +251,14 @@ def main():
                     link.set_temp(
                         item["temp_mc"], temp_seq, 0, True,
                         0 if item.get("source") == "sysfs" else 1)
+                    thermal.sample(
+                        item["temp_c"], item["temp_mc"],
+                        0 if item.get("source") == "sysfs" else 1,
+                        now=now)
                 except Exception as exc:  # noqa: BLE001
-                    if now - last_temp < 2.1:
-                        print(f"temperature failed: {exc}", flush=True)
+                    thermal.sample_failed(now)
+                    link.set_temp(0, temp_seq, 0, False, 0xFF)
+                    print(f"temperature failed: {exc}", flush=True)
 
             try:
                 status = link.transaction()
@@ -171,21 +268,40 @@ def main():
                 continue
 
             controller.tick(status)
+            if status.link_state == p.LINK_ACTIVE:
+                thermal.ensure_link_config()
+            elif last_link_state == p.LINK_ACTIVE:
+                thermal.link_lost()
+            last_link_state = status.link_state
+
             now = time.monotonic()
+            if now - last_lamp_sample >= 0.05:
+                last_lamp_sample = now
+                lamp_state = controller.snapshot()
+                lamp_history.append({
+                    "t": round(now, 3),
+                    "duties": list(lamp_state["duties"]),
+                    "active_mask": lamp_state["active_mask"],
+                    "gate": bool(controller.gate_until and
+                                 now < controller.gate_until),
+                })
+
             if now - last_log >= 2.0:
                 last_log = now
                 snap = controller.snapshot()
+                t = thermal.snapshot()
                 print(
                     f"link={snap['link_state']} mode={snap['mode']} "
                     f"active=0x{snap['active_mask']:X} "
-                    f"glyphs={snap['glyph_state']} "
-                    f"web={snap['brightness']}% "
-                    f"faults=0x{snap['fault_flags']:04X}",
+                    f"lamp={snap['brightness']}% "
+                    f"temp={t['temp_c']}C heater={t['duty']} "
+                    f"enabled={t['enabled']} faults=0x{snap['fault_flags']:04X}",
                     flush=True,
                 )
             time.sleep(0.02)
     finally:
         try:
+            link.set_heater(0, False)
             link.queue_all_off()
             for _ in range(3):
                 link.transaction()

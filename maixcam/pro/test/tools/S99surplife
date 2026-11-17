@@ -39,7 +39,7 @@ start() {
 
     if have_usb_mic; then
         nohup sh -c 'while true; do
-            python3 -u main.py --no-spi 2>&1 |
+            python3 -u main.py --no-spi --debug-kws 2>&1 |
             tee /root/surplife/run/kws_web.log |
             python3 -u tools/spi_service.py --hold 1.2 --web-port 80 --frequency 100000
             sleep 2

@@ -130,38 +130,53 @@ class Stm32SpiLink:
     def _payload(self, now):
         # Caller holds self._lock.
         chunks = []
+
+        def add(kind, value):
+            chunks.append((kind, value))
+
         if self._hello_pending:
-            chunks.append(p.hello(
+            add("hello", p.hello(
                 heartbeat_ms=50,
                 features=(p.FEATURE_PERFORM | p.FEATURE_TEMP |
                           p.FEATURE_HEARTBEAT | p.FEATURE_THERMAL_PID),
             ))
         elif self._temp is not None and (now - self._temp_sent_at) >= 1.0:
-            chunks.append(self._temp)
+            add("temp", self._temp)
             self._temp_sent_at = now
 
         thermal_active = (self._thermal_config is not None or
                           self._heater is not None)
         if self._pending_event is not None:
-            chunks.append(self._pending_event[0])
+            add("event", self._pending_event[0])
         elif self._direct_duties is not None:
-            chunks.append(p.set_lamps(self._direct_duties))
+            add("direct", p.set_lamps(self._direct_duties))
         elif not self._hello_pending and not thermal_active:
-            chunks.append(p.heartbeat(
+            add("heartbeat", p.heartbeat(
                 maix_uptime_ms=int((now - self._started) * 1000),
                 state_flags=0))
 
         if not self._hello_pending and self._thermal_config is not None:
-            chunks.append(self._thermal_config)
+            add("thermal_config", self._thermal_config)
             self._thermal_config_pending = True
         if not self._hello_pending and self._heater is not None:
-            chunks.append(self._heater)
+            add("heater", self._heater)
 
-        payload = b"".join(chunks)
+        def pack(items):
+            return b"".join(value for _, value in items)
+
+        payload = pack(chunks)
+        # TRANSPORT BUDGET: 44 payload bytes.  Never silently drop a safety
+        # chunk.  Drop the optional temp first, then defer the lamp frame by
+        # one transaction so THERMAL_CONFIG + HEATER can fit alongside it.
         if len(payload) > p.MAX_PAYLOAD:
-            # Drop the optional temperature chunk before giving up.
-            payload = b"".join(
-                chunk for chunk in chunks if chunk is not self._temp)
+            chunks = [item for item in chunks if item[0] != "temp"]
+            payload = pack(chunks)
+        if len(payload) > p.MAX_PAYLOAD:
+            chunks = [item for item in chunks if item[0] != "direct"]
+            payload = pack(chunks)
+        if len(payload) > p.MAX_PAYLOAD:
+            chunks = [item for item in chunks if item[0] != "heartbeat"]
+            payload = pack(chunks)
         if len(payload) > p.MAX_PAYLOAD:
             raise RuntimeError("SPI payload exceeds 44 bytes")
         return payload
