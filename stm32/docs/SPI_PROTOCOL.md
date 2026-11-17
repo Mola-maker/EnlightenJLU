@@ -99,6 +99,8 @@ value  len bytes
 
 STM32 支持版本 1。收到合法 HELLO 后进入 ACTIVE，所有字牌保持 OFF，等待后续 PERFORM/STANDBY。
 
+HELLO 会清除已有的加热安全包络（`THERMAL_CONFIG`）。链路超时后主机若要恢复加热，必须在同一帧或紧接的帧中重发 `HELLO` + `THERMAL_CONFIG` + `HEATER`；只重发 HELLO/HEATER 会让 STM32 停在 ACTIVE 但 `configured=0`、HEAT=0 的状态。
+
 #### TEMP = 0x02，len = 10
 
 ```text

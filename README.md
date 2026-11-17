@@ -228,7 +228,10 @@ st-flash --reset write stm32/firmware/PWM-Heater.bin 0x08000000
 - Web 直控需要 `firmware/PWM-Heater-web.bin`（`SET_LAMPS`）；
 - 温控 PID 在 `maixcam/pro/test/tools/thermal_pid.py` 命令行端运行，
   STM32 执行 HEAT1/HEAT2，并在未配置、温度无效/过期、过温、链路丢失时强制 0%；
-- 默认 PI（Kd=0），目标 43 °C，硬上限 46 °C。
+- 默认 PI（Kd=0），目标 43 °C，硬上限 46 °C；加热上限默认 600‰，接近目标时
+  从 350‰ 的保持占空比开始 PI，避免冷启动时积分饱和；
+- SPI 链路恢复时 HELLO + THERMAL_CONFIG 合并到同一帧；连续坏帧会重新打开
+  `/dev/spidev4.0`，日志同时打印 STM32 uptime/复位次数和真实链路状态。
 
 ## 7. 已验证状态和限制
 
@@ -274,8 +277,9 @@ SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 - PID 调试改用命令行 `tools/temp_monitor.py` 实时打印结温，支持
   text/CSV/JSON 和滚动 min/max/avg；Web 控制台不再作为温度调试入口；
 - 温控命令行 `tools/thermal_pid.py` 支持 dry-run、`--enable`、Kp/Ki/Kd、
-  最大占空比和过温保护；实测 HEAT 命令已下发，但当前热耦合/加热电源
-  未观察到结温响应，尚不能完成 43 °C 闭环；
+  最大占空比、保持占空比/暖启动和过温保护；2026-11-17 实测 600‰ 上限下
+  能到 43 °C 附近，但长时间运行时 STM32 曾掉线并清空配置，需结合新日志中的
+  `up/rst/fault` 判断是供电跌落、MCU 复位还是 SPI 总线问题；
 - 应用黑屏根因是 `rcS` 的 `S??*` 通配符把 `S06maixapp.*.bak` 当成启动脚本，
   多个 launcher 同时抢占 `/dev/cvi-vo`；备份已移到 `/root/surplife/init_backups`。
 
@@ -283,8 +287,9 @@ SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 
 - 13 路灯牌的实际光输出尚未现场确认（SPI 控制链和 PWM 命令已验证）；
 - ST-Link NRST 尚未接，建议后续调试补上；
-- 保温板温度闭环尚未完成：HEAT 执行和固件过温/超时保护已实现，但当前
-  加热器与 SG2002 结温传感器没有可观测的热耦合；
+- 保温板温度闭环仍在调参：HEAT 执行、固件保护和暖启动 PI 已实现；
+  600‰ 下已观察到明显热响应，但长时稳定性还取决于电源余量、SPI 接触和
+  加热器/传感器热耦合；
 - 过流硬件保护尚未实现；
 - 一代 Pro 权重只存在设备上；
 - 语音业务和麦克风 UI 不能同时占用 USB 麦克风；
@@ -306,6 +311,7 @@ SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 ## 9. 相关文档
 
 - [`docs/ASSET_INVENTORY.md`](docs/ASSET_INVENTORY.md)
+- [`docs/THERMAL_PID_BRINGUP.md`](docs/THERMAL_PID_BRINGUP.md)
 - [`model/README.md`](model/README.md)
 - [`maixcam/README.md`](maixcam/README.md)
 - [`maixcam/pro/README.md`](maixcam/pro/README.md)

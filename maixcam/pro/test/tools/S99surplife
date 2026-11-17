@@ -2,6 +2,11 @@
 # Start the 13-lamp Web UI + optional USB-mic KWS after the launcher.
 # The SPI4 bit-banged bus is owned only by tools/spi_service.py; KWS runs
 # in a separate process and feeds TRIGGER lines into that service.
+#
+# The supervisor runs in its own session (setsid), so stop() can terminate the
+# complete shell/tail/python process group.  Older versions only killed the
+# Python child; the outer "while true" shells survived and could later restart
+# a second SPI owner while thermal_pid.py was running.
 set -u
 
 RUN=/root/surplife/run
@@ -13,14 +18,55 @@ have_usb_mic() {
     arecord -l 2>/dev/null | grep -q "USB Audio"
 }
 
+is_running() {
+    [ -f "$PIDFILE" ] || return 1
+    old=$(cat "$PIDFILE" 2>/dev/null || true)
+    [ -n "${old:-}" ] && kill -0 "$old" 2>/dev/null
+}
+
+# Remove orphan supervisors/services left by an older S99 script.  This is
+# deliberately limited to the SPI-service/tail pipelines; it never kills a
+# thermal_pid.py run or an unrelated Python process.
+terminate_matching() {
+    for dir in /proc/[0-9]*; do
+        [ -r "$dir/cmdline" ] || continue
+        pid=${dir##*/}
+        [ "$pid" = "$$" ] && continue
+        comm=$(cat "$dir/comm" 2>/dev/null || true)
+        cmd=$(tr '\0' ' ' <"$dir/cmdline" 2>/dev/null || true)
+        case "$comm" in
+            python3|setsid)
+                case "$cmd" in
+                    *"tools/spi_service.py"*) kill -TERM "$pid" 2>/dev/null || true ;;
+                esac
+                ;;
+            tail)
+                case "$cmd" in
+                    "tail -f /dev/null "*) kill -TERM "$pid" 2>/dev/null || true ;;
+                esac
+                ;;
+            sh)
+                # Only the actual supervisor shell, not an SSH/grep command
+                # that merely mentions these strings.
+                case "$cmd" in
+                    *"while true; do"*"tools/spi_service.py"*)
+                        kill -TERM "$pid" 2>/dev/null || true
+                        ;;
+                esac
+                ;;
+        esac
+    done
+}
+
 start() {
-    if [ -f "$PIDFILE" ]; then
-        old=$(cat "$PIDFILE" 2>/dev/null || true)
-        if [ -n "${old:-}" ] && kill -0 "$old" 2>/dev/null; then
-            echo "surplife already running (pid $old)"
-            return 0
-        fi
+    if is_running; then
+        echo "surplife already running (pid $(cat "$PIDFILE"))"
+        return 0
     fi
+
+    # A missing/stale pidfile can still leave old wrappers behind.
+    terminate_matching
+    sleep 1
 
     # The USB-C port defaults to device mode after every boot.  A powered
     # hub + USB microphone needs host mode.  This does not affect WiFi.
@@ -38,20 +84,20 @@ start() {
     cd "$TEST" || return 1
 
     if have_usb_mic; then
-        nohup sh -c 'while true; do
+        setsid sh -c 'while true; do
             python3 -u main.py --no-spi --debug-kws 2>&1 |
             tee /root/surplife/run/kws_web.log |
             python3 -u tools/spi_service.py --hold 1.2 --web-port 80 --frequency 100000
             sleep 2
         done' </dev/null >"$RUN/web_service.log" 2>&1 &
     else
-        nohup sh -c 'while true; do
+        setsid sh -c 'while true; do
             tail -f /dev/null |
             python3 -u tools/spi_service.py --hold 1.2 --web-port 80 --frequency 100000
             sleep 2
         done' </dev/null >"$RUN/web_service.log" 2>&1 &
     fi
-    echo $! > "$PIDFILE"
+    echo $! >"$PIDFILE"
     if have_usb_mic; then
         echo "surplife started pid $(cat "$PIDFILE") (usb_mic=yes)"
     else
@@ -62,21 +108,30 @@ start() {
 stop() {
     if [ -f "$PIDFILE" ]; then
         old=$(cat "$PIDFILE" 2>/dev/null || true)
-        [ -n "${old:-}" ] && kill "$old" 2>/dev/null || true
+        if [ -n "${old:-}" ]; then
+            kill -TERM "-$old" 2>/dev/null || kill -TERM "$old" 2>/dev/null || true
+            sleep 1
+            kill -KILL "-$old" 2>/dev/null || true
+        fi
         rm -f "$PIDFILE"
     fi
-    # Best-effort cleanup of the two worker processes.  The only Python
-    # processes on this device are the KWS and SPI services.
-    ps -o pid,comm 2>/dev/null |
-        awk '$2 == "python3" {print $1}' |
-        while read -r p; do
-            kill -9 "$p" 2>/dev/null || true
-        done
+    terminate_matching
+    echo "surplife stopped"
+}
+
+status() {
+    if is_running; then
+        echo "surplife running pid $(cat "$PIDFILE")"
+        return 0
+    fi
+    echo "surplife stopped"
+    return 1
 }
 
 case "${1:-start}" in
     start) start ;;
     stop) stop ;;
     restart) stop; sleep 1; start ;;
-    *) echo "Usage: $0 start|stop|restart"; exit 2 ;;
+    status) status ;;
+    *) echo "Usage: $0 start|stop|restart|status"; exit 2 ;;
 esac

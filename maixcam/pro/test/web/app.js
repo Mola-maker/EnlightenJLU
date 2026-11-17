@@ -39,7 +39,7 @@
     thermal: {
       temp_c: null, temp_valid: false, setpoint_c: 43, margin_c: 3,
       ambient_c: -4, anchor_c: 21, determined_at: "—",
-      kp: 60, ki: 1, kd: 0, max_duty: 300, enabled: false,
+      kp: 60, ki: 1, kd: 0, max_duty: 600, enabled: false,
       duty: 0, p: 0, i: 0, d: 0, overtemp: false,
       slope_c_per_s: null, no_response: false,
     },

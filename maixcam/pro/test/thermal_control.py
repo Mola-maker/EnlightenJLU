@@ -1,16 +1,17 @@
 """Thermal PID state for the local MaixCAM console.
 
-The PID is intentionally small and explicit: proportional + integral action
-with conditional integration/anti-windup, and an optional derivative term.
-The SG2002 junction sensor updates at roughly 1 Hz, so the default Kd is 0.
-The STM32 receives a safety envelope and a HEAT duty request; it still has the
-final over-temperature/stale-temperature/link-loss cutoff.
+The controller delegates the actual PI state machine to ``thermal_pi`` so the
+web console and command-line controller use the same warm-start/anti-windup
+rules.  The SG2002 junction sensor updates at roughly 1 Hz, so the default Kd
+is 0.  The STM32 receives a safety envelope and a HEAT duty request; it still
+has the final over-temperature/stale-temperature/link-loss cutoff.
 """
 from __future__ import annotations
 
-import math
 import time
 from collections import deque
+
+from thermal_pi import ThermalPI
 
 DEFAULT_SETPOINT_C = 43.0
 DEFAULT_MARGIN_C = 3.0
@@ -19,12 +20,11 @@ DEFAULT_ANCHOR_C = 21.0
 DEFAULT_KP = 60.0
 DEFAULT_KI = 1.0
 DEFAULT_KD = 0.0
-DEFAULT_MAX_DUTY = 300
+DEFAULT_MAX_DUTY = 600
+DEFAULT_HOLD_DUTY = 350
+DEFAULT_WARMUP_BAND_C = 2.0
+DEFAULT_WARMUP_HYSTERESIS_C = 0.5
 HISTORY_SECONDS = 300
-
-
-def _clamp(value, low, high):
-    return max(low, min(high, value))
 
 
 class ThermalController:
@@ -38,6 +38,9 @@ class ThermalController:
         self.ki = DEFAULT_KI
         self.kd = DEFAULT_KD
         self.max_duty = DEFAULT_MAX_DUTY
+        self.hold_duty = DEFAULT_HOLD_DUTY
+        self.warmup_band_c = DEFAULT_WARMUP_BAND_C
+        self.warmup_hysteresis_c = DEFAULT_WARMUP_HYSTERESIS_C
         self.enabled = False
         self.determined_at = "2026-11-17"
         self.config_dirty = True
@@ -55,9 +58,20 @@ class ThermalController:
         self.d_term = 0.0
         self.overtemp = False
         self.history = deque(maxlen=HISTORY_SECONDS)
-        self._integral = 0.0
-        self._previous_temp_c = None
-        self._previous_tick = None
+        self._pi = self._new_pi()
+
+    def _new_pi(self):
+        return ThermalPI(
+            setpoint_c=self.setpoint_c,
+            margin_c=self.margin_c,
+            kp=self.kp,
+            ki=self.ki,
+            kd=self.kd,
+            max_duty=self.max_duty,
+            hold_duty=min(self.hold_duty, self.max_duty),
+            warmup_band_c=self.warmup_band_c,
+            warmup_hysteresis_c=self.warmup_hysteresis_c,
+        )
 
     # ---- configuration / HTTP commands -------------------------------
     def configure(self, payload):
@@ -75,6 +89,11 @@ class ThermalController:
                 raise ValueError(f"{name} must be {low}..{high}")
             return value
 
+        old_pi_parameters = (
+            self.setpoint_c, self.margin_c, self.kp, self.ki, self.kd,
+            self.max_duty, self.hold_duty, self.warmup_band_c,
+            self.warmup_hysteresis_c,
+        )
         self.setpoint_c = number("setpoint_c", self.setpoint_c, 0.0, 100.0)
         self.margin_c = number("margin_c", self.margin_c, 0.0, 20.0)
         self.ambient_c = number("ambient_c", self.ambient_c, -40.0, 60.0)
@@ -84,10 +103,26 @@ class ThermalController:
         self.kd = number("kd", self.kd, 0.0, 50.0)
         self.max_duty = int(round(number(
             "max_duty", self.max_duty, 0.0, 1000.0)))
+        self.hold_duty = int(round(number(
+            "hold_duty", self.hold_duty, 0.0, 1000.0)))
+        self.hold_duty = min(self.hold_duty, self.max_duty)
+        self.warmup_band_c = number(
+            "warmup_band_c", self.warmup_band_c, 0.0, 20.0)
+        self.warmup_hysteresis_c = number(
+            "warmup_hysteresis_c", self.warmup_hysteresis_c, 0.0, 5.0)
         if "enabled" in payload:
             self.enabled = bool(payload["enabled"])
         if "determined_at" in payload:
             self.determined_at = str(payload["determined_at"])[:40]
+
+        new_pi_parameters = (
+            self.setpoint_c, self.margin_c, self.kp, self.ki, self.kd,
+            self.max_duty, self.hold_duty, self.warmup_band_c,
+            self.warmup_hysteresis_c,
+        )
+        if new_pi_parameters != old_pi_parameters:
+            self._pi = self._new_pi()
+
         self.config_dirty = True
         if not self.enabled:
             self._shutdown_output()
@@ -165,7 +200,8 @@ class ThermalController:
         self.p_term = 0.0
         self.i_term = 0.0
         self.d_term = 0.0
-        self._integral = 0.0
+        self.overtemp = False
+        self._pi = self._new_pi()
         self.link.set_heater(0, False)
 
     def _step(self, now):
@@ -173,39 +209,12 @@ class ThermalController:
             self._shutdown_output()
             return
 
-        dt = 1.0 if self._previous_tick is None else max(
-            0.05, now - self._previous_tick)
-        error_c = self.setpoint_c - self.temp_c
-        p_term = self.kp * error_c
-        d_term = 0.0
-        if self.kd > 0.0 and self._previous_temp_c is not None:
-            d_term = -self.kd * (self.temp_c - self._previous_temp_c) / dt
-
-        candidate = self._integral + self.ki * error_c * dt
-        candidate = _clamp(candidate, 0.0, float(self.max_duty))
-        unsaturated = p_term + candidate + d_term
-        if ((unsaturated > self.max_duty and error_c > 0.0) or
-                (unsaturated < 0.0 and error_c < 0.0)):
-            candidate = self._integral
-        self._integral = _clamp(candidate, 0.0, float(self.max_duty))
-        self.i_term = self._integral
-        self.p_term = p_term
-        self.d_term = d_term
-        self.output = _clamp(p_term + self.i_term + d_term,
-                             0.0, float(self.max_duty))
-
-        upper = self.setpoint_c + self.margin_c
-        release = upper - 1.0
-        if self.temp_c >= upper:
-            self.overtemp = True
-            self.output = 0.0
-            self._integral = 0.0
-            self.i_term = 0.0
-        elif self.overtemp and self.temp_c <= release:
-            self.overtemp = False
-
-        self._previous_temp_c = self.temp_c
-        self._previous_tick = now
+        out = self._pi.update(self.temp_c, now)
+        self.p_term = out.p_term
+        self.i_term = out.i_term
+        self.d_term = out.d_term
+        self.output = out.output
+        self.overtemp = out.overtemp
         self.link.set_heater(int(round(self.output)), self.enabled)
 
     # ---- UI state -----------------------------------------------------
@@ -237,6 +246,10 @@ class ThermalController:
             "ki": self.ki,
             "kd": self.kd,
             "max_duty": self.max_duty,
+            "hold_duty": self.hold_duty,
+            "warmup_band_c": self.warmup_band_c,
+            "warmup_hysteresis_c": self.warmup_hysteresis_c,
+            "warmup": self._pi.last.warmup,
             "enabled": self.enabled,
             "duty": round(self.output, 1),
             "p": round(self.p_term, 2),

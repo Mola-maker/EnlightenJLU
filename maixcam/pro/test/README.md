@@ -159,7 +159,7 @@ curl -X POST http://192.168.43.229/api/lamp \
 
 curl -X POST http://192.168.43.229/api/thermal \
   -H 'Content-Type: application/json' \
-  -d '{"setpoint_c":43,"margin_c":3,"ambient_c":-4,"anchor_c":21,"kp":60,"ki":1,"kd":0,"max_duty":300,"enabled":false}'
+  -d '{"setpoint_c":43,"margin_c":3,"ambient_c":-4,"anchor_c":21,"kp":60,"ki":1,"kd":0,"max_duty":600,"hold_duty":350,"enabled":false}'
 ```
 
 默认加热是关闭的；勾选页面“加热使能”或 POST `enabled:true` 才会实际
@@ -268,7 +268,9 @@ python3 -u tools/temp_monitor.py --interval 1
 
 ### 4.1.3 温控 PID（命令行）
 
-PID 在 MaixCAM 命令行端计算，STM32 只执行 HEAT1/HEAT2 并做硬安全保护：
+PID 在 MaixCAM 命令行端计算，STM32 只执行 HEAT1/HEAT2 并做硬安全保护。
+当前推荐参数是 `--max-duty 600`、`--hold-duty 350`，即冷启动允许 60%
+加热，接近目标时从 35% 开始 PI：
 
 ```sh
 cd /root/surplife/test
@@ -276,36 +278,48 @@ cd /root/surplife/test
 # 默认 dry-run：只打印 P/I/D，不加热
 python3 -u tools/thermal_pid.py --setpoint 43 --margin 3
 
-# 允许加热，HEAT 上限 30%
+# 允许加热，60% 上限，暖启动后从 35% 保持点开始 PI
 python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
-  --enable --max-duty 300
+  --enable --max-duty 600 --hold-duty 350
 
 # 调参：Kp/Ki 为 permille/°C 与 permille/(°C*s)
 python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
-  --kp 60 --ki 1.0 --kd 0 --enable --max-duty 300
+  --kp 60 --ki 1.0 --kd 0 --enable \
+  --max-duty 600 --hold-duty 350 --warmup-band 2.0
 ```
 
 默认策略：
 
 - **PI 为主，Kd=0**：SG2002 结温约 1.048 s 更新一次，且存在量化噪声；
   热对象时间常数长，D 项通常放大噪声，先不启用；
-- 积分负责消除 -4 °C 环境下的稳态误差，条件积分 + 输出限幅做抗饱和；
+- **暖启动**：离目标超过 `--warmup-band` 时用 `--max-duty` 开环加热，
+  积分器固定在 `--hold-duty`，不会把饱和输出累积进积分；进入目标前
+  2 °C 后从保持占空比开始 PI；
+- 进入 PI 后仍使用条件积分：输出已经饱和时冻结积分，避免再次过冲；
 - 目标 43 °C，`--margin 3` 建立 46 °C 硬上限；回落到 45 °C 以下才恢复；
-- 默认 `--max-duty 300`（30%），确认热响应后可提高，但不要超过硬件
-  额定功率；`--enable` 不写就是 dry-run。
+- `--max-duty` 默认 600（60%），`--hold-duty` 默认 350（35%，会自动
+  裁剪到 `--max-duty` 以下）；不要超过电源和功率电阻的额定值。
+
+日志中的 `up=` 是 STM32 运行秒数，`rst=` 是检测到的复位次数，
+`fault=0x....` 是 STATUS 故障位，`link=DOWN` 表示最后一次 SPI 事务已失败，
+不再沿用上一帧的 `link=2/heat=599`。若长时间运行时出现 `rst` 增加或
+`link=DOWN`，应先检查 5 V 电源余量、共地、SPI 线和加热器回流路径，
+而不是继续调 PID。
 
 固件侧保护：
 
 - 未配置、未使能、温度无效/过期、`setpoint+margin` 过温、SPI 链路丢失
   都会强制 HEAT=0；
-- STATUS 返回 `heater_duty` 和 `heater_flags`；
-- `ALL_OFF` 会关闭 HEAT 并要求重新配置。
+- STATUS 返回 `heater_duty`、`heater_flags`、STM32 uptime；
+- `ALL_OFF` 会关闭 HEAT 并要求重新配置；
+- 主机在链路恢复/STM32 复位后会在同一帧重发 HELLO + THERMAL_CONFIG，
+  并在连续坏帧后重新打开 SPI 设备。
 
-本机 2026-11-17 实测：HEAT 实际到 300‰ 和 1000‰ 时，SG2002 结温在
-18 s 内基本不动（约 27–29 °C），说明当前 HEAT1/HEAT2 与 MaixCAM 结温
-传感器没有有效热耦合，或加热电源/负载未接通。PID 代码和固件执行链
-已跑通，但要闭环保温 43 °C，必须先确认加热器实际发热并与温度探头/
-主控热耦合。
+2026-11-17 实测：`--max-duty 600` 时结温可以从约 35 °C 升到 43 °C；
+但第二次运行约 29 s 后 STM32 状态变为 `flags=0x00`，随后 SPI 连续
+`bad magic`。这说明控制器本身没有触发过温/未配置保护，问题在链路或
+STM32 供电/复位。新版日志已加入 uptime/复位计数和真实 DOWN 状态，
+下一次复现即可区分是 MCU 复位还是 SPI 传输失效。
 
 ### 4.2 USB 麦克风检查
 

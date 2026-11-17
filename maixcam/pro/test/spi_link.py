@@ -12,6 +12,7 @@ truncated or shifted response under system load.
 """
 from __future__ import annotations
 
+import fcntl
 import os
 import threading
 import time
@@ -39,17 +40,14 @@ class Stm32SpiLink:
         if self.bus == 4:
             ensure_spi4_device()
 
-        self._spi = spidev.SpiDev()
-        self._spi.open(self.bus, self.device)
-        self._spi.bits_per_word = 8
-        self._spi.max_speed_hz = self.frequency
-        if self.bus == 4 and self.settle_time:
-            # The bit-banged SPI4 controller needs a short settling
-            # period after open; early transfers otherwise return
-            # truncated/0xFF frames under load.
-            time.sleep(self.settle_time)
-        # Do not write self._spi.mode / cshigh here.  The spi-gpio
-        # driver used by SPI4 rejects mode=0 and reports mode=0x4.
+        self._bus_lock_fd = None
+        self._acquire_bus_lock()
+        self._spi = None
+        try:
+            self._open_transport()
+        except Exception:
+            self._release_bus_lock()
+            raise
 
         self.session_id = session_id or (
             int.from_bytes(os.urandom(4), "little") or 1
@@ -60,6 +58,8 @@ class Stm32SpiLink:
         self._pending_event = None
         self._direct_duties = None
         self._thermal_config = None
+        self._thermal_config_saved = None
+        self._thermal_config_enable = False
         self._thermal_config_pending = False
         self._heater = None
         self._temp = None
@@ -68,6 +68,85 @@ class Stm32SpiLink:
         self._last_caps = None
         self._started = time.monotonic()
         self._lock = threading.Lock()
+
+    def _acquire_bus_lock(self):
+        """Prevent two MaixCAM processes from clocking the same STM32 bus.
+
+        The web service and the command-line thermal controller both open
+        `/dev/spidev4.0`.  Without an inter-process lock, a leftover S99
+        supervisor or a second manual run can interleave frames: each process
+        presents a different session_id, so the STM32 resets its thermal
+        envelope and both sides see random `bad magic` responses.
+        """
+        path = f"/tmp/stm32-spi{self.bus}.lock"
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            os.close(fd)
+            raise RuntimeError(
+                f"SPI bus {self.bus} is already owned by another process "
+                f"({path})") from exc
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+        except OSError:
+            pass
+        self._bus_lock_fd = fd
+
+    def _release_bus_lock(self):
+        fd = getattr(self, "_bus_lock_fd", None)
+        self._bus_lock_fd = None
+        if fd is None:
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+    def _open_transport(self):
+        """Open /dev/spidevX.Y and apply the settings this bus requires."""
+        spi = spidev.SpiDev()
+        spi.open(self.bus, self.device)
+        spi.bits_per_word = 8
+        spi.max_speed_hz = self.frequency
+        if self.bus == 4 and self.settle_time:
+            # The bit-banged SPI4 controller needs a short settling
+            # period after open; early transfers otherwise return
+            # truncated/0xFF frames under load.
+            time.sleep(self.settle_time)
+        # Do not write spi.mode / cshigh here.  The spi-gpio driver used by
+        # SPI4 rejects mode=0 and reports mode=0x4.
+        self._spi = spi
+
+    def reopen(self):
+        """Recover a wedged software-SPI transport.
+
+        A spidev file descriptor can survive individual bad frames but stop
+        producing valid ones after a reset or a long error burst.  Reopening
+        the descriptor and re-arming HELLO + THERMAL_CONFIG is the only way
+        to get out of that state without restarting the controller process.
+        """
+        with self._lock:
+            old_spi = self._spi
+            self._spi = None
+            if old_spi is not None:
+                try:
+                    old_spi.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+            self._open_transport()
+            self._hello_pending = True
+            self._thermal_config = self._thermal_config_saved
+            self._thermal_config_pending = False
+            self._temp_sent_at = 0.0
+            self._last_status = None
+            self._last_caps = None
 
     @property
     def status(self):
@@ -98,9 +177,12 @@ class Stm32SpiLink:
                            ki_x100=200, kd_x100=0, max_duty=300,
                            enable=True):
         with self._lock:
-            self._thermal_config = p.thermal_config(
+            config = p.thermal_config(
                 setpoint_mc, margin_mc, kp_x100, ki_x100, kd_x100,
                 max_duty, enable)
+            self._thermal_config = config
+            self._thermal_config_saved = config
+            self._thermal_config_enable = bool(enable)
 
     def set_heater(self, duty, enable=True):
         with self._lock:
@@ -155,10 +237,16 @@ class Stm32SpiLink:
                 maix_uptime_ms=int((now - self._started) * 1000),
                 state_flags=0))
 
-        if not self._hello_pending and self._thermal_config is not None:
+        # Append the safety configuration even when HELLO is being sent.  The
+        # STM32 handles HELLO first and then THERMAL_CONFIG in the same frame,
+        # so a reset/link-timeout cannot strand the heater in the
+        # "active but unconfigured" state.  Previously these two chunks were
+        # mutually exclusive, which made recovery from a marginal link loop
+        # forever between WAIT_HELLO and ACTIVE with output permanently off.
+        if self._thermal_config is not None:
             add("thermal_config", self._thermal_config)
             self._thermal_config_pending = True
-        if not self._hello_pending and self._heater is not None:
+        if self._heater is not None:
             add("heater", self._heater)
 
         def pack(items):
@@ -178,10 +266,17 @@ class Stm32SpiLink:
             chunks = [item for item in chunks if item[0] != "heartbeat"]
             payload = pack(chunks)
         if len(payload) > p.MAX_PAYLOAD:
+            # A queued lamp event is not a safety chunk.  Defer it for one
+            # transaction rather than failing the whole SPI keepalive frame.
+            chunks = [item for item in chunks if item[0] != "event"]
+            payload = pack(chunks)
+        if len(payload) > p.MAX_PAYLOAD:
             raise RuntimeError("SPI payload exceeds 44 bytes")
         return payload
 
     def _transaction_once(self, payload):
+        if self._spi is None:
+            raise SpiTransactionError("SPI transport is closed")
         seq = self.seq
         self.seq = (self.seq + 1) & 0xFFFFFFFF
         tx = p.build_frame(p.TYPE_CONTROL, seq, self.session_id, payload)
@@ -216,7 +311,7 @@ class Stm32SpiLink:
                     f"{last_error}") from last_error
 
             self._last_status = status
-            self._last_caps = caps
+            self._last_caps = caps or self._last_caps
             if self._thermal_config_pending:
                 # Send THERMAL_CONFIG once, not on every keepalive frame.
                 self._thermal_config = None
@@ -228,6 +323,23 @@ class Stm32SpiLink:
             # STM32 reset or a >500 ms link timeout without restarting
             # the MaixCAM process.
             self._hello_pending = (status.link_state != p.LINK_ACTIVE)
+
+            if self._thermal_config_saved is not None:
+                caps_now = self._last_caps or {}
+                supports_thermal = bool(
+                    caps_now.get("features", 0) & p.FEATURE_THERMAL_PID)
+                configured = bool(status.heater_flags & 0x10)
+                enabled = bool(status.heater_flags & 0x01)
+                need_config = (not configured or
+                               (self._thermal_config_enable and not enabled))
+                if (self._hello_pending or
+                        (supports_thermal and need_config)):
+                    # Re-arm the safety envelope together with HELLO.  If
+                    # the status is one frame behind, the config is sent
+                    # again and is harmless; it stops as soon as STATUS
+                    # reports configured (and enabled when requested).
+                    self._thermal_config = self._thermal_config_saved
+                    self._temp_sent_at = 0.0
 
             if self._pending_event is not None:
                 _, event_seq = self._pending_event
@@ -241,7 +353,12 @@ class Stm32SpiLink:
             return status
 
     def close(self):
-        try:
-            self._spi.close()
-        except Exception:  # noqa: BLE001
-            pass
+        with self._lock:
+            spi = self._spi
+            self._spi = None
+            if spi is not None:
+                try:
+                    spi.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._release_bus_lock()
