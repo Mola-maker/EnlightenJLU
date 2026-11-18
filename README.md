@@ -72,8 +72,11 @@ EnlightenJLU/
 cp -a maixcam/pro/app/. /root/surplife/app/       # 权重留在 /root/models/am_3332_192_int8.mud
 cd /root/surplife/app && ./run_voice_pwm.sh       # 前台
 ./start_voice_pwm.sh                              # 或后台：start / status / stop
-./run_lamp_ui.sh                                  # 触摸 UI（约 128 MB 内存，勿与语音长跑）
 ```
+
+> 一代板上的触摸 UI（`lamp_ui.py`）已于 2026-11-18 删除：它在 128 MB 的 Pro 上
+> 与语音模型抢内存（需要靠 `oom_score_adj` 抢优先级），实际灯牌调试已由
+> `maixcam/pro/test/` 的 Web 控制台承担。需要旧 UI 可从 Git 历史取回。
 
 ### 4.2 二代 MaixCAM2（SenseVoice + 本地临时灯效）
 

@@ -24,15 +24,12 @@ mkdir -p /root/surplife/run /root/surplife/logs /root/surplife/artifacts
 | 文件 | 作用 |
 |---|---|
 | `app/voice_pwm.py` | KWS、单字/整词门控、A18/PWM6 + A19/PWM7 1 kHz 灯效 |
-| `app/live_kws.py` | UI 专用 KWS/音量事件发布 |
-| `app/lamp_ui.py` | 640×480 触摸灯效测试 UI |
+| `app/live_kws.py` | KWS/音量事件发布（FIFO，供调试观察） |
 | `app/sg2002_temp.py` | SG2002 温度读取 |
 | `app/asoundrc.surplife` | 麦克风分流 ALSA 配置 |
 | `app/run_voice_pwm.sh` | 前台入口 |
 | `app/start_voice_pwm.sh` / `stop_voice_pwm.sh` / `status_voice_pwm.sh` | 后台管理 |
-| `app/run_lamp_ui.sh` | UI 启动，暂停/恢复后台语音 |
 | `app/README_pwm.md` | KWS、门限、灯效曲线、接线 |
-| `app/README_lamp_ui.md` | UI 操作和触摸方向 |
 | `app/README_TEMP_SENSOR.md` | 温度寄存器和换算 |
 | `app/tests/test_voice_pwm.py` | 门控/评分测试 |
 | `app/tests/test_sg2002_temp.py` | 温度换算测试 |
@@ -52,13 +49,9 @@ cd /root/surplife/app
 ./stop_voice_pwm.sh
 ```
 
-触摸 UI：
-
-```sh
-./run_lamp_ui.sh
-```
-
-128 MB 板子上 UI 和后台语音不要同时长期运行。
+> 一代板上的触摸 UI（`lamp_ui.py` / `run_lamp_ui.sh`）已于 2026-11-18 删除：
+> 它在 128 MB 的 Pro 上与语音模型抢内存，灯牌/温控调试已改由
+> `maixcam/pro/test/` 的 Web 控制台承担。旧文件可从 Git 历史取回。
 
 ## 一代 KWS 词表
 

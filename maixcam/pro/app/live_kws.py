@@ -1,27 +1,29 @@
 #!/usr/bin/env python3
 """
-LUMEN UI 的实时 KWS 进程。
+实时 KWS 观察进程（不写 PWM）。
 
-复用 voice_pwm.py 的麦克风 DSP、门控检测和 Maix-Speech KWS，但**不写 PWM**。
-它把 gate / env / env_slow / peak / prob 通过一个非阻塞 FIFO 发给 lamp_ui.py，
-由 UI 继续使用自己的衰减参数驱动画面（以及可选的 A18/A19 硬件输出）。
+复用 voice_pwm.py 的麦克风 DSP、门控检测和 Maix-Speech KWS，但**不驱动灯效**，
+只把 gate / env / env_slow / peak / prob 以 20 Hz JSON 写进一个非阻塞 FIFO，
+用于观察门控与关键词概率。
+
+历史上这个 FIFO 是喂给已删除的板上触摸 UI（`lamp_ui.py`）的；
+现在直接 `cat` 或用 Web 控制台的日志观察即可。
 
 架构:
-  lamp_ui.py
-      └─ live_kws.py (KWS 主进程)
-           ├─ voice_pwm.MicTap 子进程 (100 Hz 音量 DSP)
-           └─ publisher 子进程 (20 Hz 写 JSON FIFO)
+  live_kws.py (KWS 主进程)
+      ├─ voice_pwm.MicTap 子进程 (100 Hz 音量 DSP)
+      └─ publisher 子进程 (20 Hz 写 JSON FIFO)
 
 publisher 必须是独立进程而不是线程: speech.run(1) 每次会占住 GIL 数百毫秒，
-线程拿不到足够的时间片，UI 收到的包络会变成 ~1 Hz。
+线程拿不到足够的时间片，包络会退化成 ~1 Hz。
 
-单独调试:
-    python3 live_kws.py --fifo /root/surplife/run/lamp_ui_kws.fifo
-    # 另一个终端: cat /root/surplife/run/lamp_ui_kws.fifo
+用法:
+    python3 live_kws.py --fifo /root/surplife/run/live_kws.fifo
+    # 另一个终端: cat /root/surplife/run/live_kws.fifo
 
 测试注入（不依赖真人说话）:
     LIVE_KWS_TEST_GATE_AFTER=4 LIVE_KWS_TEST_ENV=0.8 \
-        python3 live_kws.py --fifo /root/surplife/run/lamp_ui_kws.fifo
+        python3 live_kws.py --fifo /root/surplife/run/live_kws.fifo
 """
 
 from __future__ import annotations
@@ -143,7 +145,8 @@ def main() -> int:
     # 否则 UI 内存/CPU 压力大时先被杀掉的是 live_kws。
     vp.raise_voice_priority()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fifo", required=True, help="UI 事件 FIFO")
+    parser.add_argument("--fifo", required=True,
+                        help="KWS/音量事件 FIFO 路径（供 cat 观察）")
     parser.add_argument("--rate", type=float,
                         default=_env_float("LIVE_KWS_PUBLISH_HZ", 20.0))
     parser.add_argument("--business-hold", type=float,

@@ -38,14 +38,14 @@ EnlightenJLU/
 | 文件 | 作用 |
 |---|---|
 | `voice_pwm.py` | Maix-Speech KWS、单字/整词门控、A18/PWM6 + A19/PWM7 1 kHz 灯效 |
-| `live_kws.py` | UI 专用 KWS/音量事件发布 |
-| `lamp_ui.py` | 640×480 触摸灯效测试 UI |
+| `live_kws.py` | KWS/音量事件发布（FIFO 观察） |
+| ~~`lamp_ui.py`~~ | ~~640×480 触摸灯效测试 UI~~ → **2026-11-18 删除** |
 | `sg2002_temp.py` | SG2002 温度读取 |
 | `asoundrc.surplife` | ALSA file 插件麦克风分流 |
 | `run_voice_pwm.sh` / `start_voice_pwm.sh` / `stop_voice_pwm.sh` / `status_voice_pwm.sh` | 运行和后台管理 |
-| `run_lamp_ui.sh` | UI 启动，暂停/恢复后台语音 |
+| ~~`run_lamp_ui.sh`~~ | ~~UI 启动，暂停/恢复后台语音~~ → **2026-11-18 删除** |
 | `README_pwm.md` | KWS、门限、灯效曲线、接线 |
-| `README_lamp_ui.md` | UI 操作、触摸方向、资源优先级 |
+| ~~`README_lamp_ui.md`~~ | ~~UI 操作、触摸方向、资源优先级~~ → **2026-11-18 删除** |
 | `README_TEMP_SENSOR.md` | 温度寄存器和换算 |
 | `tests/test_voice_pwm.py` | 门控/评分测试 |
 | `tests/test_sg2002_temp.py` | 温度换算测试 |
@@ -56,9 +56,22 @@ EnlightenJLU/
 ```text
 voice_pwm.py    1534 行
 live_kws.py      258 行
-lamp_ui.py      2375 行
+lamp_ui.py      2375 行   # 2026-11-18 删除
 sg2002_temp.py   166 行
 ```
+
+### 2026-11-18 移除一代板上触摸 UI
+
+一代板上的 `lamp_ui.py`（2375 行，640×480 触摸 UI）、`run_lamp_ui.sh` 与
+`README_lamp_ui.md` 已从仓库和板上删除：
+
+- 它在 128 MB 内存的 MaixCAM Pro 上必须靠 `oom_score_adj=500` 抢优先级，
+  与语音模型争内存，容易触发 OOM；
+- 灯牌与温控的实际调试入口已迁移到 `maixcam/pro/test/` 的 Web 控制台
+  （浏览器 + SSE 实时波形），板上 UI 属重复实现，留着只会让人误以为还有两条并行路径；
+- 需要旧 UI 时从 Git 历史取回（`git log -- maixcam/pro/app/lamp_ui.py`）。
+- `live_kws.py` 保留：它不再驱动 UI，只把门控/概率以 20 Hz JSON 写 FIFO 供观察，
+  FIFO 默认路径改为 `/root/surplife/run/live_kws.fifo`。
 
 板端运行路径保持：
 

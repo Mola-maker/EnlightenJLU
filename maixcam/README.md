@@ -23,7 +23,7 @@ maixcam/
 ├── pro/
 │   ├── VERSION
 │   ├── README.md
-│   └── app/                 # voice_pwm.py, live_kws.py, lamp_ui.py, temp, scripts, tests
+│   └── app/                 # voice_pwm.py, live_kws.py, temp, scripts, tests
 └── maixcam2/
     ├── app/                 # SenseVoice + SPI + local PWM
     ├── config/              # keywords + SenseVoice descriptor
