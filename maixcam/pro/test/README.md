@@ -159,7 +159,7 @@ curl -X POST http://192.168.43.229/api/lamp \
 
 curl -X POST http://192.168.43.229/api/thermal \
   -H 'Content-Type: application/json' \
-  -d '{"setpoint_c":43,"margin_c":3,"ambient_c":-4,"anchor_c":21,"kp":60,"ki":1,"kd":0,"max_duty":500,"hold_duty":170,"enabled":false}'
+  -d '{"setpoint_c":43,"margin_c":3,"ambient_c":-4,"anchor_c":21,"kp":60,"ki":1,"kd":0,"max_duty":500,"hold_duty":350,"enabled":false}'
 ```
 
 默认加热是关闭的；勾选页面“加热使能”或 POST `enabled:true` 才会实际
@@ -269,8 +269,8 @@ python3 -u tools/temp_monitor.py --interval 1
 ### 4.1.3 温控 PID（命令行）
 
 PID 在 MaixCAM 命令行端计算，STM32 只执行 HEAT1/HEAT2 并做硬安全保护。
-5V/2A 适配器建议用 `--max-duty 500 --hold-duty 170 --split-heat`；
-5V/3A 以上电源可用 `--max-duty 600 --hold-duty 170`（默认 balanced）。
+5V/2A 适配器建议用 `--max-duty 500 --hold-duty 350 --split-heat`；
+5V/3A 以上电源可用 `--max-duty 600 --hold-duty 350`（默认 balanced）。
 duty 是两路合计功率：balanced 两路同 duty，split 拆成 HEAT1=1000‰、
 HEAT2=0/200‰，避免 5V 母线出现 3A 峰值：
 
@@ -282,16 +282,16 @@ python3 -u tools/thermal_pid.py --setpoint 43 --margin 3
 
 # 5V/2A 适配器：50% 总功率 + split 通道
 python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
-  --enable --max-duty 500 --hold-duty 170 --split-heat
+  --enable --max-duty 500 --hold-duty 350 --split-heat
 
 # 5V/3A 以上：60% 总功率，默认 balanced
 python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
-  --enable --max-duty 600 --hold-duty 170
+  --enable --max-duty 600 --hold-duty 350
 
 # 调参：Kp/Ki 为 permille/°C 与 permille/(°C*s)
 python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
   --kp 60 --ki 1.0 --kd 0 --enable \
-  --max-duty 500 --hold-duty 170 --warmup-band 4.0
+  --max-duty 500 --hold-duty 350 --warmup-band 4.0
 ```
 
 默认策略：
@@ -306,7 +306,7 @@ python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
   过冲；可用 `--slope-window`/`--slope-lookahead` 调整；
 - 进入 PI 后仍使用条件积分：输出已经饱和时冻结积分，避免再次过冲；
 - 目标 43 °C，`--margin 3` 建立 46 °C 硬上限；回落到 45 °C 以下才恢复；
-- `--max-duty` 默认 500（50%），`--hold-duty` 默认 170（17%）；
+- `--max-duty` 默认 500（50%），`--hold-duty` 默认 350（35%）；
 - 不带 `--split-heat` 时两路同 duty，600‰ 的 5V 峰值约 3A，需要 5V/3A+；
   5V/2A 必须加 `--split-heat`，此时 600‰ 为 HEAT1=1000‰、HEAT2=200‰，
   500‰ 为 1000/0；

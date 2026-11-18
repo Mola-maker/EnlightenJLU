@@ -56,9 +56,10 @@ class ThermalPI:
         ki: float = 1.0,
         kd: float = 0.0,
         max_duty: int = 600,
-        hold_duty: int = 170,
+        hold_duty: int = 350,
         warmup_band_c: float = 4.0,
         warmup_hysteresis_c: float = 0.5,
+        warmup_rearm: bool = False,
         integral_window_c: float = 0.6,
         integral_slow_factor: float = 0.05,
         slope_window_s: float = 45.0,
@@ -95,6 +96,7 @@ class ThermalPI:
         self.hold_duty = min(int(hold_duty), int(max_duty))
         self.warmup_band_c = float(warmup_band_c)
         self.warmup_hysteresis_c = float(warmup_hysteresis_c)
+        self.warmup_rearm = bool(warmup_rearm)
         self.integral_window_c = float(integral_window_c)
         self.integral_slow_factor = float(integral_slow_factor)
         self.slope_window_s = float(slope_window_s)
@@ -192,7 +194,7 @@ class ThermalPI:
         else:
             band = self.warmup_band_c
             rearm_at = self.setpoint_c - band - self.warmup_hysteresis_c
-            if band > 0.0 and temp_c <= rearm_at:
+            if band > 0.0 and self.warmup_rearm and temp_c <= rearm_at:
                 self._warmup = True
 
             if band > 0.0 and self._warmup and temp_c <= self.setpoint_c - band:

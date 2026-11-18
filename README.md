@@ -229,7 +229,7 @@ st-flash --reset write stm32/firmware/PWM-Heater.bin 0x08000000
 - 温控 PID 在 `maixcam/pro/test/tools/thermal_pid.py` 命令行端运行，
   STM32 执行 HEAT1/HEAT2，并在未配置、温度无效/过期、过温、链路丢失时强制 0%；
 - 默认 PI（Kd=0），目标 43 °C，硬上限 46 °C；加热上限默认 500‰（5V/2A
-  适配器保守值），接近目标时从 170‰ 的保持占空比开始 PI；P 项使用 45 s
+  适配器保守值），接近目标时从 350‰ 的保持占空比开始 PI；P 项使用 45 s
   斜率滤波和 90 s 温度预测，补偿 SoC 传感器/加热板的长滞后；
 - HEATER duty 是两路合计功率；默认 balanced（两路同 duty），`--split-heat`
   时拆成 HEAT1/HEAT2（600‰ -> 1000/200）以适配 5V/2A；600‰ balanced 需要

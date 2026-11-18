@@ -21,9 +21,10 @@ DEFAULT_KP = 60.0
 DEFAULT_KI = 1.0
 DEFAULT_KD = 0.0
 DEFAULT_MAX_DUTY = 500
-DEFAULT_HOLD_DUTY = 170
+DEFAULT_HOLD_DUTY = 350
 DEFAULT_WARMUP_BAND_C = 4.0
 DEFAULT_WARMUP_HYSTERESIS_C = 0.5
+DEFAULT_WARMUP_REARM = False
 DEFAULT_INTEGRAL_WINDOW_C = 0.6
 DEFAULT_INTEGRAL_SLOW_FACTOR = 0.05
 DEFAULT_SLOPE_WINDOW_S = 45.0
@@ -46,6 +47,7 @@ class ThermalController:
         self.hold_duty = DEFAULT_HOLD_DUTY
         self.warmup_band_c = DEFAULT_WARMUP_BAND_C
         self.warmup_hysteresis_c = DEFAULT_WARMUP_HYSTERESIS_C
+        self.warmup_rearm = DEFAULT_WARMUP_REARM
         self.integral_window_c = DEFAULT_INTEGRAL_WINDOW_C
         self.integral_slow_factor = DEFAULT_INTEGRAL_SLOW_FACTOR
         self.slope_window_s = DEFAULT_SLOPE_WINDOW_S
@@ -82,6 +84,7 @@ class ThermalController:
             hold_duty=min(self.hold_duty, self.max_duty),
             warmup_band_c=self.warmup_band_c,
             warmup_hysteresis_c=self.warmup_hysteresis_c,
+            warmup_rearm=self.warmup_rearm,
             integral_window_c=self.integral_window_c,
             integral_slow_factor=self.integral_slow_factor,
             slope_window_s=self.slope_window_s,
@@ -108,7 +111,8 @@ class ThermalController:
         old_pi_parameters = (
             self.setpoint_c, self.margin_c, self.kp, self.ki, self.kd,
             self.max_duty, self.hold_duty, self.warmup_band_c,
-            self.warmup_hysteresis_c, self.integral_window_c,
+            self.warmup_hysteresis_c, self.warmup_rearm,
+            self.integral_window_c,
             self.integral_slow_factor, self.slope_window_s,
             self.slope_lookahead_s, self.slope_deadband_c_per_s,
         )
@@ -128,6 +132,8 @@ class ThermalController:
             "warmup_band_c", self.warmup_band_c, 0.0, 20.0)
         self.warmup_hysteresis_c = number(
             "warmup_hysteresis_c", self.warmup_hysteresis_c, 0.0, 5.0)
+        if "warmup_rearm" in payload:
+            self.warmup_rearm = bool(payload["warmup_rearm"])
         self.integral_window_c = number(
             "integral_window_c", self.integral_window_c, 0.0, 10.0)
         self.integral_slow_factor = number(
@@ -149,7 +155,8 @@ class ThermalController:
         new_pi_parameters = (
             self.setpoint_c, self.margin_c, self.kp, self.ki, self.kd,
             self.max_duty, self.hold_duty, self.warmup_band_c,
-            self.warmup_hysteresis_c, self.integral_window_c,
+            self.warmup_hysteresis_c, self.warmup_rearm,
+            self.integral_window_c,
             self.integral_slow_factor, self.slope_window_s,
             self.slope_lookahead_s, self.slope_deadband_c_per_s,
         )
@@ -283,6 +290,7 @@ class ThermalController:
             "hold_duty": self.hold_duty,
             "warmup_band_c": self.warmup_band_c,
             "warmup_hysteresis_c": self.warmup_hysteresis_c,
+            "warmup_rearm": self.warmup_rearm,
             "integral_window_c": self.integral_window_c,
             "integral_slow_factor": self.integral_slow_factor,
             "slope_window_s": self.slope_window_s,

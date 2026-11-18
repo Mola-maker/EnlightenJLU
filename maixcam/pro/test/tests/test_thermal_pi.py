@@ -51,6 +51,15 @@ class ThermalPiTest(unittest.TestCase):
         # 1.5 C error is outside the 0.6 C window; dt is capped at 5 s.
         self.assertAlmostEqual(out.i_term, 350.45)
 
+    def test_warmup_does_not_rearm_by_default(self):
+        pi = ThermalPI(setpoint_c=43, max_duty=1000, hold_duty=350,
+                       kp=60, ki=1, warmup_band_c=2,
+                       warmup_hysteresis_c=0.5)
+        pi.update(42.0, now=0.0)
+        out = pi.update(38.0, now=1.0)
+        self.assertFalse(out.warmup)
+        self.assertLess(out.output, 1000)
+
     def test_positive_slope_uses_predictive_p_term(self):
         pi = ThermalPI(setpoint_c=43, max_duty=500, hold_duty=170,
                        kp=60, warmup_band_c=0,
@@ -94,7 +103,7 @@ class ThermalPiTest(unittest.TestCase):
     def test_warmup_rearms_after_a_large_drop(self):
         pi = ThermalPI(setpoint_c=43, max_duty=600, hold_duty=350,
                        kp=60, ki=1, warmup_band_c=2,
-                       warmup_hysteresis_c=0.5)
+                       warmup_hysteresis_c=0.5, warmup_rearm=True)
         pi.update(42.0, now=0.0)
         pi.update(40.4, now=1.0)
         out = pi.update(40.8, now=2.0)

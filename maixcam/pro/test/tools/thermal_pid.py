@@ -43,11 +43,11 @@ Examples:
 
     # Active run: 60% total power (5V/3A+ supply recommended)
     python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
-        --enable --max-duty 600 --hold-duty 170
+        --enable --max-duty 600 --hold-duty 350
 
     # Conservative run on a 5V/2A adapter
     python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
-        --enable --max-duty 500 --hold-duty 170
+        --enable --max-duty 500 --hold-duty 350
 
     # More aggressive tuning
     python3 -u tools/thermal_pid.py --kp 80 --ki 1.5 --enable
@@ -92,13 +92,17 @@ def parse_args(argv=None):
                              "600 needs more than a 5V/2A supply margin)")
     parser.add_argument("--hold-duty", type=int, default=None,
                         help="PI starting/holding duty near the setpoint "
-                             "(default 170, clipped to --max-duty)")
+                             "(default 350, clipped to --max-duty)")
     parser.add_argument("--warmup-band", type=float, default=4.0,
                         help="distance below setpoint at which open-loop "
                              "warm-up hands over to PI (default 4 C)")
     parser.add_argument("--warmup-hysteresis", type=float, default=0.5,
                         help="extra distance before warm-up re-arms after a "
                              "drop (default 0.5 C)")
+    parser.add_argument("--warmup-rearm", action="store_true",
+                        help="re-enter full-power warm-up after a large drop "
+                             "(default off; prevents limit cycles after the "
+                             "first approach)")
     parser.add_argument("--integral-window", type=float, default=0.6,
                         help="full-Ki band around setpoint; outside it only "
                              "trim slowly to avoid plateau wind-up (default 0.6 C)")
@@ -133,7 +137,7 @@ def parse_args(argv=None):
     if not 0 <= args.max_duty <= 1000:
         parser.error("--max-duty must be 0..1000")
     if args.hold_duty is None:
-        args.hold_duty = min(170, args.max_duty)
+        args.hold_duty = min(350, args.max_duty)
     elif not 0 <= args.hold_duty <= 1000:
         parser.error("--hold-duty must be 0..1000")
     elif args.hold_duty > args.max_duty:
@@ -275,6 +279,7 @@ def main(argv=None):
         hold_duty=hold_duty,
         warmup_band_c=args.warmup_band,
         warmup_hysteresis_c=args.warmup_hysteresis,
+        warmup_rearm=args.warmup_rearm,
         integral_window_c=args.integral_window,
         integral_slow_factor=args.integral_slow,
         slope_window_s=args.slope_window,
