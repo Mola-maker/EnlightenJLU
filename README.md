@@ -315,6 +315,7 @@ SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 
 ## 9. 相关文档
 
+- [`docs/HANDOVER.md`](docs/HANDOVER.md) —— **接手/上手指南**：换 WiFi（含开放 SSID）、找设备 IP、服务互斥关系、−20 °C 冷室标定注意事项、校园网实测结论
 - [`docs/ASSET_INVENTORY.md`](docs/ASSET_INVENTORY.md)
 - [`docs/THERMAL_PID_BRINGUP.md`](docs/THERMAL_PID_BRINGUP.md)
 - [`model/README.md`](model/README.md)

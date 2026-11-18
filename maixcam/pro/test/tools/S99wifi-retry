@@ -1,0 +1,70 @@
+#!/bin/sh
+# 开机连接 WiFi（SSID/密码来自 /etc/wifi.ssid + /etc/wifi.pass，缺失时回退 /boot/*）
+#
+# 2026-11-18 修复两处：
+#   1) DHCP 判据从"接口有没有 IP"改为"有没有默认路由"。
+#      原逻辑在接口残留旧 IP 时会跳过 DHCP，导致"连着 WiFi 但没有默认路由、
+#      也没有 DHCP 客户端"，表现为能 ping 自己却上不了网、别的机器也连不上。
+#      实际踩坑现场：wlan0 上有 192.168.43.229 但 ip route show default 为空。
+#   2) udhcpc 从 `-n -q`（拿不到租约就退出、拿到就退出）改为 `-b -t 10 -T 1 -A 5`
+#      + pidfile：租约过期后仍会自动续租，而不是等重启。
+#   3) 密码为空时按开放网络（key_mgmt=NONE）配置，此前一律 wpa_passphrase，
+#      无法连接校园网这类开放 SSID。
+LOG=/etc/wifi-retry.log
+echo "=== wifi-retry start $(date) ===" >> $LOG
+if [ ! -e /sys/class/net/wlan0 ]; then
+    /etc/init.d/S25wifimod start >> $LOG 2>&1
+fi
+i=0
+while [ ! -e /sys/class/net/wlan0 ] && [ "$i" -lt 40 ]; do
+    sleep 1
+    i=$((i + 1))
+done
+if [ ! -e /sys/class/net/wlan0 ]; then
+    echo "no wlan0" >> $LOG
+    exit 0
+fi
+SSID=$(cat /etc/wifi.ssid 2>/dev/null)
+PASS=$(cat /etc/wifi.pass 2>/dev/null)
+if [ -z "$SSID" ]; then
+    SSID=$(cat /boot/wifi.ssid 2>/dev/null)
+    PASS=$(cat /boot/wifi.pass 2>/dev/null)
+fi
+if [ -z "$SSID" ]; then
+    echo "no ssid configured" >> $LOG
+    exit 0
+fi
+echo "ssid=$SSID open=$([ -z "$PASS" ] && echo yes || echo no)" >> $LOG
+if [ -n "$PASS" ]; then
+    printf 'ctrl_interface=/var/run/wpa_supplicant\n' > /etc/wpa_supplicant.conf
+    wpa_passphrase "$SSID" "$PASS" >> /etc/wpa_supplicant.conf
+else
+    printf 'ctrl_interface=/var/run/wpa_supplicant\nnetwork={\n\tssid="%s"\n\tkey_mgmt=NONE\n}\n' "$SSID" > /etc/wpa_supplicant.conf
+fi
+ip link set wlan0 up
+for p in $(pidof wpa_supplicant 2>/dev/null); do kill "$p" 2>/dev/null; done
+sleep 2
+for attempt in 1 2 3; do
+    wpa_supplicant -B -f /etc/wpa.log -i wlan0 -c /etc/wpa_supplicant.conf
+    sleep 6
+    if iw dev wlan0 link 2>/dev/null | grep -q 'SSID:'; then
+        echo "associated attempt=$attempt" >> $LOG
+        break
+    fi
+    echo "attempt $attempt failed" >> $LOG
+    for p in $(pidof wpa_supplicant 2>/dev/null); do kill "$p" 2>/dev/null; done
+    sleep 2
+done
+# 没有默认路由就取租约（不看是否已有 IP，避免残留地址导致漏获取）
+if ! ip route show default 2>/dev/null | grep -q 'via'; then
+    udhcpc -i wlan0 -b -t 10 -T 1 -A 5 -p /run/udhcpc.wlan0.pid >> $LOG 2>&1
+    sleep 3
+    if ! ip route show default 2>/dev/null | grep -q 'via'; then
+        echo "dhcp: still no default route" >> $LOG
+    fi
+fi
+ip -brief addr show wlan0 >> $LOG 2>&1
+ip route show default >> $LOG 2>&1
+mkdir -p /var/lock
+(/etc/init.d/S50sshd start >> $LOG 2>&1 &)
+exit 0
