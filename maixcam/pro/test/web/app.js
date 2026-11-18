@@ -228,6 +228,26 @@
     }
   }
 
+  let wifiTimer = null;
+
+  function renderWifiMeta(data) {
+    const d = data || {};
+    const ip = d.ip || "无 IP";
+    const ssid = d.current_ssid || "未连接";
+    const el = $("#railMeta");
+    if (el) el.textContent = `IP ${ip} · ${ssid}`;
+    document.title = ip === "无 IP"
+      ? "JLU Lamp + Thermal Console"
+      : `${ip} · JLU Console`;
+  }
+
+  function fetchWifiMeta() {
+    fetch("/api/wifi", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d) renderWifiMeta(d); })
+      .catch(() => {});
+  }
+
   let wifiPoll = null;
 
   function renderWifi(data) {
@@ -252,7 +272,7 @@
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then(renderWifi)
+      .then((d) => { renderWifi(d); renderWifiMeta(d); })
       .catch(() => {
         $("#netStatus").textContent = "不支持";
         $("#netStatus").className = "small-status warn";
@@ -625,4 +645,7 @@
   // 250 ms 轮询会把 CPU 占满并让 bit-bang SPI 丢帧，这里降到 1 s / 3 s。
   stateTimer = setInterval(fetchState, 1000);
   historyTimer = setInterval(fetchHistory, 3000);
+  // 设备 IP 常显在左侧栏底部：换热点/换网段时不用翻页或登 shell 就能看到
+  fetchWifiMeta();
+  wifiTimer = setInterval(fetchWifiMeta, 10000);
 })();

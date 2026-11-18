@@ -15,8 +15,12 @@ def create_console_app(state_fn, history_fn, lamp, thermal, web_dir: Path,
 
     @app.after_request
     def no_cache(response):
-        if request.path.startswith(("/api/", "/static/")):
-            response.headers["Cache-Control"] = "no-store"
+        # The console is a live view of the device and is edited in place on the
+        # board; never let a browser keep a stale index.html or app.js.
+        if (request.path == "/" or request.path.startswith(("/api/", "/static/"))
+                or request.path.endswith(".html")):
+            response.headers["Cache-Control"] = "no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
         return response
 
     @app.get("/")
