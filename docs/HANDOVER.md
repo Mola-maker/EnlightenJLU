@@ -58,8 +58,18 @@ python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 --enable \
 
 板上 WiFi 由 `/etc/init.d/S99wifi-retry` 负责，凭据来源：
 
-1. 优先 `/etc/wifi.ssid` + `/etc/wifi.pass`
-2. 缺失时回退 `/boot/wifi.ssid` + `/boot/wifi.pass`
+1. **多网络候选表**：`/etc/wifi.networks` 或 `/boot/wifi.networks`（每行 `SSID|密码`，
+   密码留空=开放网络，**顺序即优先级**，越靠前越优先）——推荐用这个，设备会自动挑在范围内的那个；
+2. 单网络：`/etc/wifi.ssid` + `/etc/wifi.pass`；
+3. 以上缺失时回退 `/boot/wifi.ssid` + `/boot/wifi.pass`。
+
+推荐配置（热点优先，校园网兜底；`/boot` 是 FAT，PC 上直接编辑）：
+
+```text
+# /boot/wifi.networks
+Jl521522|手机热点密码
+JLU.PC|
+```
 
 **`/boot` 是 FAT 分区，可以直接把 TF 卡/启动分区挂到 Windows 上编辑**（纯文本，无引号）：
 
@@ -72,6 +82,11 @@ python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 --enable \
 
 > 本次修复：原脚本只会用 `wpa_passphrase` 生成 WPA-PSK 配置，**连不了开放 SSID**；
 > 现在密码为空时按开放网络配置。原文件备份在 `/root/surplife/archive/debug-net/S99wifi-retry.orig`。
+
+**⚠️ wpa_supplicant 不会跨 SSID 主动漫游**：设备一旦关联上某个网络（例如校园网），
+即使你把手机热点开起来，它也会一直停在那儿，表现为"热点里找不到设备、SSH 连不上"。
+排查顺序：`iw dev wlan0 link`（看当前 SSID）→ 不在期望网络就
+`/etc/init.d/S99wifi-retry restart`；没有 SSH 通道时直接**断电重启**，开机脚本会重新选网。
 
 ## 4. 设备 IP 怎么找（DHCP 分配，可能每天都在变）
 

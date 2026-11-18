@@ -10,6 +10,13 @@
 #      + pidfile：租约过期后仍会自动续租，而不是等重启。
 #   3) 密码为空时按开放网络（key_mgmt=NONE）配置，此前一律 wpa_passphrase，
 #      无法连接校园网这类开放 SSID。
+#   4) 支持多网络候选表，避免"赖在错误的网络里"：wpa_supplicant 不会主动跨 SSID
+#      漫游，一旦关联上校园网就会一直停在那儿（校园网还有客户端隔离、无外网），
+#      表现就是想连热点却连不上。现在可以给一张候选表，按顺序给优先级。
+#
+# 网络配置的优先级（从高到低）：
+#   /etc/wifi.networks 或 /boot/wifi.networks   每行 "SSID|密码"，密码留空=开放网络
+#   /etc/wifi.ssid + /etc/wifi.pass（或 /boot 同名文件）  单网络，兼容旧用法
 LOG=/etc/wifi-retry.log
 echo "=== wifi-retry start $(date) ===" >> $LOG
 if [ ! -e /sys/class/net/wlan0 ]; then
@@ -24,23 +31,53 @@ if [ ! -e /sys/class/net/wlan0 ]; then
     echo "no wlan0" >> $LOG
     exit 0
 fi
-SSID=$(cat /etc/wifi.ssid 2>/dev/null)
-PASS=$(cat /etc/wifi.pass 2>/dev/null)
-if [ -z "$SSID" ]; then
-    SSID=$(cat /boot/wifi.ssid 2>/dev/null)
-    PASS=$(cat /boot/wifi.pass 2>/dev/null)
-fi
-if [ -z "$SSID" ]; then
-    echo "no ssid configured" >> $LOG
-    exit 0
-fi
-echo "ssid=$SSID open=$([ -z "$PASS" ] && echo yes || echo no)" >> $LOG
-if [ -n "$PASS" ]; then
-    printf 'ctrl_interface=/var/run/wpa_supplicant\n' > /etc/wpa_supplicant.conf
-    wpa_passphrase "$SSID" "$PASS" >> /etc/wpa_supplicant.conf
+NETLIST=""
+for cand in /etc/wifi.networks /boot/wifi.networks; do
+    [ -r "$cand" ] && NETLIST="$cand" && break
+done
+
+if [ -n "$NETLIST" ]; then
+    # 候选表：# 开头为注释，空行忽略，格式 "SSID|密码"（密码留空=开放网络）。
+    # 顺序即优先级，越靠前越优先。
+    echo "networks=$NETLIST" >> $LOG
+    {
+        printf 'ctrl_interface=/var/run/wpa_supplicant\n'
+        prio=20
+        while IFS='|' read -r n_ssid n_pass; do
+            case "$n_ssid" in ''|'#'*) continue ;; esac
+            n_ssid=$(printf '%s' "$n_ssid" | sed 's/[[:space:]]*$//')
+            [ -z "$n_ssid" ] && continue
+            if [ -n "$n_pass" ]; then
+                printf 'network={\n\tssid="%s"\n\tpsk="%s"\n\tpriority=%s\n}\n' \
+                    "$n_ssid" "$n_pass" "$prio"
+            else
+                printf 'network={\n\tssid="%s"\n\tkey_mgmt=NONE\n\tpriority=%s\n}\n' \
+                    "$n_ssid" "$prio"
+            fi
+            echo "  candidate: $n_ssid (prio $prio, open=$([ -z "$n_pass" ] && echo yes || echo no))" >> $LOG
+            prio=$((prio - 1))
+        done < "$NETLIST"
+    } > /etc/wpa_supplicant.conf
 else
-    printf 'ctrl_interface=/var/run/wpa_supplicant\nnetwork={\n\tssid="%s"\n\tkey_mgmt=NONE\n}\n' "$SSID" > /etc/wpa_supplicant.conf
+    SSID=$(cat /etc/wifi.ssid 2>/dev/null)
+    PASS=$(cat /etc/wifi.pass 2>/dev/null)
+    if [ -z "$SSID" ]; then
+        SSID=$(cat /boot/wifi.ssid 2>/dev/null)
+        PASS=$(cat /boot/wifi.pass 2>/dev/null)
+    fi
+    if [ -z "$SSID" ]; then
+        echo "no ssid configured" >> $LOG
+        exit 0
+    fi
+    echo "ssid=$SSID open=$([ -z "$PASS" ] && echo yes || echo no)" >> $LOG
+    if [ -n "$PASS" ]; then
+        printf 'ctrl_interface=/var/run/wpa_supplicant\n' > /etc/wpa_supplicant.conf
+        wpa_passphrase "$SSID" "$PASS" >> /etc/wpa_supplicant.conf
+    else
+        printf 'ctrl_interface=/var/run/wpa_supplicant\nnetwork={\n\tssid="%s"\n\tkey_mgmt=NONE\n}\n' "$SSID" > /etc/wpa_supplicant.conf
+    fi
 fi
+chmod 600 /etc/wpa_supplicant.conf 2>/dev/null
 ip link set wlan0 up
 for p in $(pidof wpa_supplicant 2>/dev/null); do kill "$p" 2>/dev/null; done
 sleep 2

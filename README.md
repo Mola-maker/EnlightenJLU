@@ -26,7 +26,8 @@ ssh root@<设备IP> '/etc/init.d/S99surplife restart'    # 起 Web(80) + KWS
 
 浏览器打开 `http://<设备IP>/`（80 被占用时自动退 8080）；设备 IP 可用
 `http://maixcam-4e47.local/`（mDNS）或看设备屏幕。**换手机热点不用改代码**：
-改 `/boot/wifi.ssid` + `/boot/wifi.pass`（FAT 分区，PC 上直接编辑，密码留空=开放网络）。
+改 `/boot/wifi.ssid` + `/boot/wifi.pass`（FAT 分区，PC 上直接编辑，密码留空=开放网络）；
+多个网络用 `/boot/wifi.networks`（每行 `SSID|密码`，顺序即优先级）。
 
 ## 2. 系统架构
 
