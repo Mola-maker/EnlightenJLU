@@ -73,6 +73,27 @@ sg2002_temp.py   166 行
 - `live_kws.py` 保留：它不再驱动 UI，只把门控/概率以 20 Hz JSON 写 FIFO 供观察，
   FIFO 默认路径改为 `/root/surplife/run/live_kws.fifo`。
 
+### 2026-11-18 板上目录对齐仓库
+
+板端 `/root/surplife/app/` 已与本仓库 `maixcam/pro/app/` **逐文件 md5 一致**。
+清掉的更早 Surplife 遗留件（从未进入本仓库）归档在板上
+`/root/surplife/archive/legacy-surplife/`：
+
+- `ble_client.py`、`protocol.py`、`main.py` —— 旧 BLE/HTTP 窗帘主程序；
+- `voice_kws.py`、`voice_pwm_v027.py`、`README_pwm_v027.md` —— 更早的 v0.27 语音实现；
+- `run_maixcam.sh`、`run_voice.sh` —— 旧入口脚本；
+- `static/index.html` —— 旧 Surplife Web 页面；
+- `tests/test_protocol.py`、`tests/test_voice.py`、`ui_probe.py` —— 对应上述旧代码与已删除的板上 UI。
+
+顺带用仓库版本覆盖了板上两处陈旧副本（`live_kws.py`、`README_TEMP_SENSOR.md`）。
+清理前已确认 `/etc/init.d/S99surplife` 用的是 `/root/surplife/test/main.py`（当前主线），
+与被删的 `app/main.py` 无关，自启链不受影响。
+
+当前板上只剩两条明确路径：
+
+- `/root/surplife/app` —— 一代语音 PWM（KWS + A18/A19 灯效）；
+- `/root/surplife/test` —— Web 控制台 + 温控 + SPI 服务（`S99surplife` 开机自启）。
+
 板端运行路径保持：
 
 ```text
