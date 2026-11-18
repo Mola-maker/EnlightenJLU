@@ -228,9 +228,13 @@ st-flash --reset write stm32/firmware/PWM-Heater.bin 0x08000000
 - Web 直控需要 `firmware/PWM-Heater-web.bin`（`SET_LAMPS`）；
 - 温控 PID 在 `maixcam/pro/test/tools/thermal_pid.py` 命令行端运行，
   STM32 执行 HEAT1/HEAT2，并在未配置、温度无效/过期、过温、链路丢失时强制 0%；
+- 控制参数由设备自动整定：操作者只填**环境温度**和**无加热结温**，设备按
+  `thermal_tuning.py` 的物理模型推导前馈占空比、预热带与 PI 增益（Kp/Ki 不再
+  暴露给使用者）；默认工况（−4 °C / 无加热 21 °C）推导出 hold 349‰、Kp 63.5、
+  Ki 1.41，与 2026-11-17 手工整定的 350‰/60/1.0 一致；
 - 默认 PI（Kd=0），目标 43 °C，硬上限 46 °C；加热上限默认 500‰（5V/2A
-  适配器保守值），接近目标时从 350‰ 的保持占空比开始 PI；P 项使用 45 s
-  斜率滤波和 90 s 温度预测，补偿 SoC 传感器/加热板的长滞后；
+  适配器保守值）；P 项使用 45 s 斜率滤波和 90 s 温度预测，补偿 SoC
+  传感器/加热板的长滞后；
 - HEATER duty 是两路合计功率；默认 balanced（两路同 duty），`--split-heat`
   时拆成 HEAT1/HEAT2（600‰ -> 1000/200）以适配 5V/2A；600‰ balanced 需要
   5V/3A 以上电源；
@@ -280,8 +284,9 @@ SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
   STATUS 回传 `temp_mc`（约 49 °C，`temp_valid=true`），USART3 可观察；
 - PID 调试改用命令行 `tools/temp_monitor.py` 实时打印结温，支持
   text/CSV/JSON 和滚动 min/max/avg；Web 控制台不再作为温度调试入口；
-- 温控命令行 `tools/thermal_pid.py` 支持 dry-run、`--enable`、Kp/Ki/Kd、
-  最大总功率、保持占空比/暖启动、斜率预测、积分窗口和过温保护；
+- 温控命令行 `tools/thermal_pid.py` 支持 `--ambient/--no-heat` 自动整定、
+  dry-run、`--enable`、最大总功率、坡度预测、积分窗口和过温保护；
+  手工 `--kp/--ki/--kd/--hold-duty/--warmup-band` 仅用于台架整定；
   2026-11-18 多次复现“duty 回读仍为 600/500、STM32 未复位、温度反降”，
   定位为 5V 适配器/加热支路进入热保护；split 可降低峰值，但长时间高功率
   仍需稳定 5V/5A 级电源或间歇加热；

@@ -97,14 +97,25 @@ curl -N http://<IP>/api/stream       # SSE 推流（页面用）
 
 常温实测参数**不能直接照搬到冷室**，以下几点需要按现场重新标定：
 
-1. **环境温度锚点**：`/api/thermal` 与 PID 的 `ambient_c` 默认按 `-4 °C` 锚定，
-   冷室里必须改成实际环境温度，否则前馈/裕度判断会偏。
+1. **只需填两个物理量**：环境温度 `ambient_c` 和"加热全关时的结温"
+   `no_heat_junction_c`。前馈占空比、预热带和 PI 增益由设备自动推导
+   （`thermal_tuning.py`），**不需要也不应该在网页里调 Kp/Ki/Kd**。
    ```bash
+   # 先在冷室里量出无加热结温（加热全关，等结温稳定）
+   curl -s http://<IP>/api/state | python3 -c 'import json,sys;print(json.load(sys.stdin)["thermal"]["temp_c"])'
+
+   # 填入环境温度和量到的无加热结温（enabled 先保持 false）
    curl -X POST http://<IP>/api/thermal -H 'Content-Type: application/json' \
-     -d '{"setpoint_c":43,"margin_c":3,"ambient_c":-20,"anchor_c":21,"kp":60,"ki":1,"kd":0,"max_duty":500,"hold_duty":350,"enabled":false}'
+     -d '{"ambient_c":-20,"no_heat_junction_c":5,"setpoint_c":43,"margin_c":3,"max_duty":1000,"enabled":false}'
+
+   # 看推导结果：前馈占空比 / Kp / Ki / 预热带 / 满功率可达温度 / 警告
+   curl -s http://<IP>/api/thermal
    ```
-2. **加热能力**：`max_duty` / `hold_duty`（常温实测 600‰ / 170‰）是在 -4 °C 环境下的值，
-   冷室散热功率大得多，需要重新试上去；先跑 `thermal_pid.py` dry-run 观察 P/I 项再开 `--enable`。
+2. **加热能力**：`max_duty` 是硬件上限，不是控制参数。若 `/api/thermal` 返回
+   `"reachable": false` 并提示"目标不可达"，说明 `max_duty` 给的功率在冷室里不够，
+   需要提高 `max_duty`（并确认供电能力，5V/2A 用 `--split-heat`）或降低目标温度。
+   示例：-20 °C 环境、无加热结温 5 °C 时，`max_duty=500` 预计只能到约 36 °C，
+   `max_duty=1000` 预计 68 °C。
 3. **结温读数**：SG2002 自带温度传感器读的是 SoC 结温，冷室里的热耦合关系与常温不同，
    先用 `tools/temp_monitor.py` 记录一段基线。
 4. **结霜与凝露**：从冷室拿出设备时先断电、回温干燥，避免板面结露上电。

@@ -53,8 +53,21 @@ def create_console_app(state_fn, history_fn, lamp, thermal, web_dir: Path,
         except (TypeError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 400
 
+    @app.get("/api/thermal")
+    def thermal_state():
+        """Derived tuning (feedforward duty + gains) and limits."""
+        return jsonify(state_fn()["thermal"])
+
     @app.post("/api/thermal")
     def thermal_command():
+        """Configure the heater from physical inputs.
+
+        Expected payload: ``ambient_c`` and ``no_heat_junction_c``, optionally
+        ``setpoint_c`` / ``margin_c`` / ``max_duty`` / ``enabled``.  The
+        feedforward duty, warm-up band and PI gains are derived on the device;
+        ``kp`` / ``ki`` / ``kd`` are ignored unless ``engineering_override`` is
+        set explicitly (bench bring-up only).
+        """
         payload = request.get_json(silent=True) or {}
         try:
             return jsonify(thermal.configure(payload))

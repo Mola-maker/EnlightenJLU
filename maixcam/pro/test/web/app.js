@@ -38,8 +38,10 @@
     },
     thermal: {
       temp_c: null, temp_valid: false, setpoint_c: 43, margin_c: 3,
-      ambient_c: -4, anchor_c: 21, determined_at: "—",
+      ambient_c: -4, no_heat_junction_c: 21, anchor_c: 21,
+      determined_at: "—",
       kp: 60, ki: 1, kd: 0, max_duty: 500, enabled: false,
+      hold_duty: 349, warmup_band_c: 3.3, tuning: null,
       duty: 0, p: 0, i: 0, d: 0, overtemp: false,
       slope_c_per_s: null, no_response: false,
     },
@@ -175,9 +177,26 @@
     $("#targetNow").textContent = `${Number(t.setpoint_c).toFixed(1)} / ±${Number(t.margin_c).toFixed(1)}`;
     $("#dutyNow").textContent = String(Math.round(Number(t.duty) || 0));
     $("#ambientShown").textContent = `${Number(t.ambient_c).toFixed(1)} °C`;
-    $("#anchorShown").textContent = `${Number(t.anchor_c).toFixed(1)} °C`;
+    const noHeat = t.no_heat_junction_c != null ? t.no_heat_junction_c : t.anchor_c;
+    $("#noHeatShown").textContent = `${Number(noHeat).toFixed(1)} °C`;
+    const tuning = t.tuning || {};
+    const selfHeat = tuning.self_heat_c != null
+      ? Number(tuning.self_heat_c) : Number(noHeat) - Number(t.ambient_c);
+    $("#selfHeatShown").textContent = `${selfHeat.toFixed(1)} °C`;
     $("#setpointShown").textContent = `${Number(t.setpoint_c).toFixed(1)} °C`;
     $("#marginShown").textContent = `±${Number(t.margin_c).toFixed(1)} °C`;
+    $("#holdDutyShown").textContent = `${Math.round(Number(t.hold_duty) || 0)} ‰`;
+    // Derived, read-only: the operator never tunes these.
+    $("#kpShown").textContent = Number(t.kp).toFixed(1);
+    $("#kiShown").textContent = Number(t.ki).toFixed(2);
+    $("#bandShown").textContent = `${Number(t.warmup_band_c || 0).toFixed(1)} °C`;
+    $("#expectedMaxShown").textContent = tuning.expected_max_c == null
+      ? "—"
+      : `${Number(tuning.expected_max_c).toFixed(1)} °C`;
+    const warnings = Array.isArray(tuning.warnings) ? tuning.warnings : [];
+    const warningBox = $("#tuningWarning");
+    warningBox.textContent = warnings.length ? warnings.join("；") : "";
+    warningBox.style.color = warnings.length ? "var(--warn, #d97706)" : "";
     $("#pTerm").textContent = Number(t.p || 0).toFixed(1);
     $("#iTerm").textContent = Number(t.i || 0).toFixed(1);
     $("#dTerm").textContent = Number(t.d || 0).toFixed(1);
@@ -190,7 +209,7 @@
     $("#pidStatus").className = `small-status ${t.enabled ? (t.overtemp ? "warn" : "on") : ""}`;
     $("#pidNote").textContent = t.no_response
       ? "加热已输出但结温无明显上升，请检查热耦合/加热电源。"
-      : `PID 在 ${Number(t.ambient_c).toFixed(1)} °C 环境、锚定 ${Number(t.anchor_c).toFixed(1)} °C 下确定；应用参数后生效。`;
+      : `按 ${Number(t.ambient_c).toFixed(1)} °C 环境、无加热 ${Number(noHeat).toFixed(1)} °C 自动整定；前馈 ${Math.round(Number(t.hold_duty) || 0)} ‰。`;
     $("#heatState").textContent = t.enabled
       ? (t.overtemp ? "过温保护 · HEAT=0" : "PID 运行中") : "加热未使能";
     $("#tempAge").textContent = t.temp_valid
@@ -199,13 +218,10 @@
     const enable = $("#heaterEnable");
     if (document.activeElement !== enable) enable.checked = Boolean(t.enabled);
     if (!pidDirty) {
+      $("#ambientInput").value = t.ambient_c;
+      $("#noHeatInput").value = noHeat;
       $("#setpointInput").value = t.setpoint_c;
       $("#marginInput").value = t.margin_c;
-      $("#ambientInput").value = t.ambient_c;
-      $("#anchorInput").value = t.anchor_c;
-      $("#kpInput").value = t.kp;
-      $("#kiInput").value = t.ki;
-      $("#kdInput").value = t.kd;
       $("#maxInput").value = t.max_duty;
     }
   }
@@ -456,14 +472,12 @@
   }
 
   function applyPid() {
+    // Only physical inputs: the device derives feedforward duty, band and gains.
     const payload = {
+      ambient_c: Number($("#ambientInput").value),
+      no_heat_junction_c: Number($("#noHeatInput").value),
       setpoint_c: Number($("#setpointInput").value),
       margin_c: Number($("#marginInput").value),
-      ambient_c: Number($("#ambientInput").value),
-      anchor_c: Number($("#anchorInput").value),
-      kp: Number($("#kpInput").value),
-      ki: Number($("#kiInput").value),
-      kd: Number($("#kdInput").value),
       max_duty: Number($("#maxInput").value),
       enabled: $("#heaterEnable").checked,
     };
@@ -471,7 +485,7 @@
       .then((data) => {
         pidDirty = false;
         applyState({ thermal: data });
-        toast("PID 参数已应用");
+        toast("参数已应用，加热策略已自动整定");
       })
       .catch((e) => toast(e.message, true));
   }

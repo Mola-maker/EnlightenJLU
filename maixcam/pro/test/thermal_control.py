@@ -1,10 +1,22 @@
-"""Thermal PID state for the local MaixCAM console.
+"""Thermal control state for the local MaixCAM console.
+
+The operator only supplies the physics of the test environment:
+
+* ``ambient_c``          -- temperature of the chamber / room
+* ``no_heat_junction_c`` -- junction temperature the board settles at with the
+                            heater switched off (SoC self-heating included)
+
+:mod:`thermal_tuning` turns those into the steady-state feedforward duty, the
+warm-up band and the PI gains.  ``Kp``/``Ki``/``Kd`` are therefore *outputs* of
+this module, not user inputs; they can only be forced through the explicit
+``engineering_override`` flag, which exists for bench bring-up and the
+command-line controller, not for the web console.
 
 The controller delegates the actual PI state machine to ``thermal_pi`` so the
 web console and command-line controller use the same warm-start/anti-windup
-rules.  The SG2002 junction sensor updates at roughly 1 Hz, so the default Kd
-is 0.  The STM32 receives a safety envelope and a HEAT duty request; it still
-has the final over-temperature/stale-temperature/link-loss cutoff.
+rules.  The SG2002 junction sensor updates at roughly 1 Hz, so Kd stays 0.
+The STM32 receives a safety envelope and a HEAT duty request; it still has the
+final over-temperature/stale-temperature/link-loss cutoff.
 """
 from __future__ import annotations
 
@@ -12,18 +24,20 @@ import time
 from collections import deque
 
 from thermal_pi import ThermalPI
+from thermal_tuning import HEAT_GAIN_C_PER_FULL_DUTY, derive_tuning
 
 DEFAULT_SETPOINT_C = 43.0
 DEFAULT_MARGIN_C = 3.0
 DEFAULT_AMBIENT_C = -4.0
-DEFAULT_ANCHOR_C = 21.0
+#: Junction temperature with the heater off; ``anchor_c`` is the legacy name.
+DEFAULT_NO_HEAT_JUNCTION_C = 21.0
+DEFAULT_ANCHOR_C = DEFAULT_NO_HEAT_JUNCTION_C
+DEFAULT_MAX_DUTY = 500
+DEFAULT_WARMUP_HYSTERESIS_C = 0.5
+#: Only used when ``engineering_override`` is enabled (bench bring-up).
 DEFAULT_KP = 60.0
 DEFAULT_KI = 1.0
 DEFAULT_KD = 0.0
-DEFAULT_MAX_DUTY = 500
-DEFAULT_HOLD_DUTY = 350
-DEFAULT_WARMUP_BAND_C = 4.0
-DEFAULT_WARMUP_HYSTERESIS_C = 0.5
 DEFAULT_WARMUP_REARM = False
 DEFAULT_INTEGRAL_WINDOW_C = 0.6
 DEFAULT_INTEGRAL_SLOW_FACTOR = 0.05
@@ -39,13 +53,18 @@ class ThermalController:
         self.setpoint_c = DEFAULT_SETPOINT_C
         self.margin_c = DEFAULT_MARGIN_C
         self.ambient_c = DEFAULT_AMBIENT_C
-        self.anchor_c = DEFAULT_ANCHOR_C
+        self.no_heat_junction_c = DEFAULT_NO_HEAT_JUNCTION_C
+        self.heat_gain_c_per_full_duty = HEAT_GAIN_C_PER_FULL_DUTY
+        self.engineering_override = False
+        self.ignored_fields = ()
+        # Derived by _retune(); never user input unless engineering_override.
         self.kp = DEFAULT_KP
         self.ki = DEFAULT_KI
         self.kd = DEFAULT_KD
         self.max_duty = DEFAULT_MAX_DUTY
-        self.hold_duty = DEFAULT_HOLD_DUTY
-        self.warmup_band_c = DEFAULT_WARMUP_BAND_C
+        self.hold_duty = 0
+        self.warmup_band_c = 0.0
+        self.tuning = None
         self.warmup_hysteresis_c = DEFAULT_WARMUP_HYSTERESIS_C
         self.warmup_rearm = DEFAULT_WARMUP_REARM
         self.integral_window_c = DEFAULT_INTEGRAL_WINDOW_C
@@ -58,6 +77,7 @@ class ThermalController:
         self.determined_at = "2026-11-17"
         self.config_dirty = True
         self.config_sent_at = 0.0
+        self._retune()
 
         self.temp_c = None
         self.temp_mc = 0
@@ -93,6 +113,31 @@ class ThermalController:
         )
 
     # ---- configuration / HTTP commands -------------------------------
+    def _pi_parameters(self):
+        return (
+            self.setpoint_c, self.margin_c, self.kp, self.ki, self.kd,
+            self.max_duty, self.hold_duty, self.warmup_band_c,
+            self.warmup_hysteresis_c, self.warmup_rearm,
+            self.integral_window_c, self.integral_slow_factor,
+            self.slope_window_s, self.slope_lookahead_s,
+            self.slope_deadband_c_per_s,
+        )
+
+    def _retune(self):
+        """Re-derive the feedforward duty and gains from the physics inputs."""
+        self.tuning = derive_tuning(
+            self.ambient_c, self.no_heat_junction_c, self.setpoint_c,
+            self.max_duty,
+            heat_gain_c_per_full_duty=self.heat_gain_c_per_full_duty)
+        if self.engineering_override:
+            self.hold_duty = min(self.hold_duty, self.max_duty)
+        else:
+            self.kp = self.tuning.kp
+            self.ki = self.tuning.ki
+            self.kd = self.tuning.kd
+            self.hold_duty = self.tuning.hold_duty
+            self.warmup_band_c = self.tuning.warmup_band_c
+
     def configure(self, payload):
         if not isinstance(payload, dict):
             raise ValueError("JSON object required")
@@ -108,28 +153,30 @@ class ThermalController:
                 raise ValueError(f"{name} must be {low}..{high}")
             return value
 
-        old_pi_parameters = (
-            self.setpoint_c, self.margin_c, self.kp, self.ki, self.kd,
-            self.max_duty, self.hold_duty, self.warmup_band_c,
-            self.warmup_hysteresis_c, self.warmup_rearm,
-            self.integral_window_c,
-            self.integral_slow_factor, self.slope_window_s,
-            self.slope_lookahead_s, self.slope_deadband_c_per_s,
-        )
+        if "engineering_override" in payload:
+            self.engineering_override = bool(payload["engineering_override"])
+
+        old_pi_parameters = self._pi_parameters()
+
+        # --- operator inputs: the physics of the test environment --------
         self.setpoint_c = number("setpoint_c", self.setpoint_c, 0.0, 100.0)
         self.margin_c = number("margin_c", self.margin_c, 0.0, 20.0)
         self.ambient_c = number("ambient_c", self.ambient_c, -40.0, 60.0)
-        self.anchor_c = number("anchor_c", self.anchor_c, -40.0, 100.0)
-        self.kp = number("kp", self.kp, 0.0, 500.0)
-        self.ki = number("ki", self.ki, 0.0, 100.0)
-        self.kd = number("kd", self.kd, 0.0, 50.0)
+        no_heat = self.no_heat_junction_c
+        if "no_heat_junction_c" in payload:
+            no_heat = number("no_heat_junction_c", no_heat, -40.0, 150.0)
+        elif "anchor_c" in payload:   # legacy field name
+            no_heat = number("anchor_c", no_heat, -40.0, 150.0)
+        self.no_heat_junction_c = no_heat
         self.max_duty = int(round(number(
             "max_duty", self.max_duty, 0.0, 1000.0)))
-        self.hold_duty = int(round(number(
-            "hold_duty", self.hold_duty, 0.0, 1000.0)))
-        self.hold_duty = min(self.hold_duty, self.max_duty)
-        self.warmup_band_c = number(
-            "warmup_band_c", self.warmup_band_c, 0.0, 20.0)
+        # Device calibration; exposed so a different heater/plate can be used,
+        # but it is not a control-loop gain.
+        self.heat_gain_c_per_full_duty = number(
+            "heat_gain_c_per_full_duty", self.heat_gain_c_per_full_duty,
+            1.0, 500.0)
+
+        # --- plant-agnostic limits, still engineering constants ----------
         self.warmup_hysteresis_c = number(
             "warmup_hysteresis_c", self.warmup_hysteresis_c, 0.0, 5.0)
         if "warmup_rearm" in payload:
@@ -152,15 +199,25 @@ class ThermalController:
         if "determined_at" in payload:
             self.determined_at = str(payload["determined_at"])[:40]
 
-        new_pi_parameters = (
-            self.setpoint_c, self.margin_c, self.kp, self.ki, self.kd,
-            self.max_duty, self.hold_duty, self.warmup_band_c,
-            self.warmup_hysteresis_c, self.warmup_rearm,
-            self.integral_window_c,
-            self.integral_slow_factor, self.slope_window_s,
-            self.slope_lookahead_s, self.slope_deadband_c_per_s,
-        )
-        if new_pi_parameters != old_pi_parameters:
+        # --- derived values (never user input unless overridden) --------
+        self._retune()
+        if self.engineering_override:
+            self.kp = number("kp", self.kp, 0.0, 500.0)
+            self.ki = number("ki", self.ki, 0.0, 100.0)
+            self.kd = number("kd", self.kd, 0.0, 50.0)
+            self.hold_duty = int(round(number(
+                "hold_duty", self.hold_duty, 0.0, 1000.0)))
+            self.hold_duty = min(self.hold_duty, self.max_duty)
+            self.warmup_band_c = number(
+                "warmup_band_c", self.warmup_band_c, 0.0, 20.0)
+            self.ignored_fields = ()
+        else:
+            self.ignored_fields = tuple(
+                name for name in ("kp", "ki", "kd", "hold_duty",
+                                  "warmup_band_c")
+                if name in payload)
+
+        if self._pi_parameters() != old_pi_parameters:
             self._pi = self._new_pi()
 
         self.config_dirty = True
@@ -281,11 +338,20 @@ class ThermalController:
             "upper_c": round(self.setpoint_c + self.margin_c, 3),
             "lower_c": round(self.setpoint_c - self.margin_c, 3),
             "ambient_c": round(self.ambient_c, 3),
-            "anchor_c": round(self.anchor_c, 3),
+            "no_heat_junction_c": round(self.no_heat_junction_c, 3),
+            # legacy alias kept for older UI builds and log scrapers
+            "anchor_c": round(self.no_heat_junction_c, 3),
+            "heat_gain_c_per_full_duty": round(
+                self.heat_gain_c_per_full_duty, 2),
             "determined_at": self.determined_at,
-            "kp": self.kp,
-            "ki": self.ki,
-            "kd": self.kd,
+            # derived, read-only for the operator: see thermal_tuning.py
+            "kp": round(self.kp, 2),
+            "ki": round(self.ki, 3),
+            "kd": round(self.kd, 3),
+            "gains_derived": not self.engineering_override,
+            "ignored_fields": list(self.ignored_fields),
+            "tuning": (None if self.tuning is None
+                       else self.tuning.as_dict()),
             "max_duty": self.max_duty,
             "hold_duty": self.hold_duty,
             "warmup_band_c": self.warmup_band_c,

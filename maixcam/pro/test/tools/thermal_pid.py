@@ -41,16 +41,17 @@ Examples:
     # Dry run: print P/I/D every second, never energize HEAT
     python3 -u tools/thermal_pid.py --setpoint 43 --margin 3
 
-    # Active run: 60% total power (5V/3A+ supply recommended)
-    python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
-        --enable --max-duty 600 --hold-duty 350
+    # Recommended: give the two measured quantities, the device derives the
+    # feedforward duty, warm-up band and PI gains by itself
+    python3 -u tools/thermal_pid.py --ambient -4 --no-heat 21 --enable
 
-    # Conservative run on a 5V/2A adapter
-    python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
-        --enable --max-duty 500 --hold-duty 350
+    # -20 C chamber, no-heat junction measured at 5 C
+    python3 -u tools/thermal_pid.py --ambient -20 --no-heat 5 \
+        --max-duty 1000 --split-heat --enable
 
-    # More aggressive tuning
-    python3 -u tools/thermal_pid.py --kp 80 --ki 1.5 --enable
+    # Active run with hand-set gains (bench bring-up only)
+    python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
+        --enable --max-duty 600 --hold-duty 350 --kp 60 --ki 1.0
 """
 from __future__ import annotations
 
@@ -72,6 +73,7 @@ from sg2002_temp import sample as read_temperature  # noqa: E402
 from spi4_bootstrap import configure_spi4_pins, ensure_spi4_device  # noqa: E402
 from spi_link import Stm32SpiLink  # noqa: E402
 from thermal_pi import ThermalPI  # noqa: E402
+from thermal_tuning import derive_tuning  # noqa: E402
 
 
 def parse_args(argv=None):
@@ -81,6 +83,16 @@ def parse_args(argv=None):
                         help="target junction temperature in C (default 43)")
     parser.add_argument("--margin", type=float, default=3.0,
                         help="hard over-temperature margin in C (default 3)")
+    parser.add_argument("--ambient", type=float, default=None,
+                        help="ambient temperature of the test environment in C; "
+                             "with --no-heat this derives the feedforward duty, "
+                             "warm-up band and PI gains (recommended)")
+    parser.add_argument("--no-heat", type=float, default=None,
+                        help="junction temperature with the heater switched off "
+                             "in C, SoC self-heating included")
+    parser.add_argument("--heat-gain", type=float, default=63.0,
+                        help="calibration: junction rise in C at 1000 permille "
+                             "duty above the no-heat baseline (default 63)")
     parser.add_argument("--kp", type=float, default=60.0,
                         help="P gain in permille/C (default 60)")
     parser.add_argument("--ki", type=float, default=1.0,
@@ -136,6 +148,40 @@ def parse_args(argv=None):
         parser.error("--count must be >= 0")
     if not 0 <= args.max_duty <= 1000:
         parser.error("--max-duty must be 0..1000")
+
+    # Auto-tuning: with the two measured quantities the plant model supplies
+    # the feedforward duty, the warm-up band and the PI gains.  Explicit gain
+    # flags still win, so bench experiments are not blocked.
+    explicit = set()
+    argv_list = list(sys.argv[1:] if argv is None else argv)
+    for name in ("--kp", "--ki", "--kd", "--hold-duty", "--warmup-band"):
+        if any(item == name or item.startswith(name + "=")
+               for item in argv_list):
+            explicit.add(name)
+    args.tuning = None
+    if args.ambient is not None or args.no_heat is not None:
+        if args.ambient is None or args.no_heat is None:
+            parser.error("--ambient and --no-heat must be given together")
+        try:
+            tuning = derive_tuning(
+                args.ambient, args.no_heat, args.setpoint, args.max_duty,
+                heat_gain_c_per_full_duty=args.heat_gain)
+        except ValueError as exc:
+            parser.error(str(exc))
+        args.tuning = tuning
+        if "--kp" not in explicit:
+            args.kp = tuning.kp
+        if "--ki" not in explicit:
+            args.ki = tuning.ki
+        if "--kd" not in explicit:
+            args.kd = tuning.kd
+        if "--hold-duty" not in explicit:
+            args.hold_duty = tuning.hold_duty
+        if "--warmup-band" not in explicit:
+            args.warmup_band = tuning.warmup_band_c
+        for warning in tuning.warnings:
+            print(f"[tune] 警告: {warning}", file=sys.stderr)
+
     if args.hold_duty is None:
         args.hold_duty = min(350, args.max_duty)
     elif not 0 <= args.hold_duty <= 1000:
@@ -261,6 +307,16 @@ def start_keepalive(link, stop_event, log_state,
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.tuning is not None:
+        t = args.tuning
+        print(
+            "[tune] 环境 {:.1f} °C / 无加热 {:.1f} °C -> 自热 {:.1f} °C, "
+            "前馈 {:.0f}‰ (hold {}‰), Kp {:.1f}, Ki {:.3f}, 预热带 {:.1f} °C, "
+            "满功率最高约 {:.1f} °C{}".format(
+                t.ambient_c, t.no_heat_junction_c, t.self_heat_c,
+                t.required_duty, t.hold_duty, t.kp, t.ki, t.warmup_band_c,
+                t.expected_max_c, "" if t.reachable else " [目标不可达]"),
+            flush=True)
     setpoint_mc = int(round(args.setpoint * 1000))
     margin_mc = int(round(args.margin * 1000))
     kp_x100 = int(round(args.kp * 100))

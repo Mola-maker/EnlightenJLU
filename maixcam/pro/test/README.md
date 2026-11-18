@@ -127,9 +127,9 @@ http://192.168.43.229/
 
 1. **灯牌波形 + 关键词状态**：13 路 PWM 热力波形、当前波形、
    关键词监听/触发/未接入状态、最后一次关键词和 hello/welcome 分数；
-2. **加热波形 + PID 锚点**：温度/HEAT duty 双曲线、40–46 °C 目标带、
-   环境温度 −4 °C、锚定结温 21 °C、setpoint 43 °C、裕度 ±3 °C，
-   以及 Kp/Ki/Kd/max duty 和 P/I/D 实时项。
+2. **加热波形 + 自动整定**：温度/HEAT duty 双曲线、40–46 °C 目标带、
+   环境温度、无加热结温、自热温升、setpoint 43 °C、裕度 ±3 °C、前馈占空比，
+   以及**只读**的自动 Kp/Ki、预热带、满功率可达温度和 P/I/D 实时项。
 
 左侧栏是真正的四页导航，一次只显示当前功能：
 
@@ -147,7 +147,8 @@ http://192.168.43.229/
 GET  /api/state      lamp / kws / thermal / link 当前状态
 GET  /api/history    lamp 12 s 波形 + thermal 5 min 波形
 POST /api/lamp       effect / kws / off
-POST /api/thermal    setpoint/margin/ambient/anchor/Kp/Ki/Kd/max/enabled
+GET  /api/thermal    当前自动整定结果（前馈占空比 / Kp / Ki / 预热带 / 可达性）
+POST /api/thermal    ambient_c / no_heat_junction_c / setpoint_c / margin_c / max_duty / enabled
 ```
 
 示例：
@@ -157,9 +158,15 @@ curl -X POST http://192.168.43.229/api/lamp \
   -H 'Content-Type: application/json' \
   -d '{"command":"effect","effect":"comet","target":8191,"brightness":80}'
 
+# 只填两个物理量：环境温度 + 无加热结温，其余由设备推导
 curl -X POST http://192.168.43.229/api/thermal \
   -H 'Content-Type: application/json' \
-  -d '{"setpoint_c":43,"margin_c":3,"ambient_c":-4,"anchor_c":21,"kp":60,"ki":1,"kd":0,"max_duty":500,"hold_duty":350,"enabled":false}'
+  -d '{"ambient_c":-4,"no_heat_junction_c":21,"setpoint_c":43,"margin_c":3,"max_duty":500,"enabled":false}'
+
+# -20 °C 冷室：无加热结温需现场实测后填入
+curl -X POST http://192.168.43.229/api/thermal \
+  -H 'Content-Type: application/json' \
+  -d '{"ambient_c":-20,"no_heat_junction_c":5,"max_duty":1000,"enabled":false}'
 ```
 
 默认加热是关闭的；勾选页面“加热使能”或 POST `enabled:true` 才会实际
@@ -274,21 +281,65 @@ PID 在 MaixCAM 命令行端计算，STM32 只执行 HEAT1/HEAT2 并做硬安全
 duty 是两路合计功率：balanced 两路同 duty，split 拆成 HEAT1=1000‰、
 HEAT2=0/200‰，避免 5V 母线出现 3A 峰值：
 
+### 4.2 温控参数由设备推导（推荐用法）
+
+**操作者只需要提供两个能实测的物理量**，其余全部由设备计算：
+
+| 输入 | 含义 |
+|---|---|
+| `ambient_c` | 测试环境温度（冷室 / 房间） |
+| `no_heat_junction_c` | 加热全关时板子稳定后的结温（含 SoC 自热） |
+
+设备据此推导**前馈占空比、预热带和 PI 增益**（`thermal_tuning.py`）：
+
+```text
+自热温升   self_heat = no_heat - ambient
+所需升温   required  = setpoint - no_heat
+前馈占空比 hold     = 1000 * required / g          （clamp 到 max_duty）
+满功率上限 expected = no_heat + g * max_duty / 1000
+Kp = tau / (K * (lambda + theta))          K = g / 1000 [°C/‰]
+Ki = Kp / (lambda + theta)
+Kd = 0
+```
+
+其中 `g = 63 °C`（1000‰ 加热相对"无加热基线"的稳态升温）、`tau = 180 s`、
+`theta = 10 s`、`lambda = 35 s` 是**器件常数**，由 2026-11-17 的整定实验反推：
+该次实验（环境 −4 °C、无加热结温 21 °C、hold 350‰ 稳住 43 °C）给出
+`g = (43−21)/0.35 ≈ 63`；把同样输入喂给上面的公式得到 `hold=349‰、Kp=63.5、
+Ki=1.41、预热带 3.3 °C`，与当时手工整定的 350‰/Kp=60/Ki≈1.0/4 °C 一致。
+也就是说**自动整定是与实测标定自洽的，不是拍脑袋的经验值**。
+
+命令行（推荐）：
+
 ```sh
 cd /root/surplife/test
 
-# 默认 dry-run：只打印 P/I/D，不加热
-python3 -u tools/thermal_pid.py --setpoint 43 --margin 3
+# dry-run：给出环境温度与无加热结温，设备算好参数只打印不加热
+python3 -u tools/thermal_pid.py --ambient -4 --no-heat 21
 
-# 5V/2A 适配器：50% 总功率 + split 通道
-python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
-  --enable --max-duty 500 --hold-duty 350 --split-heat
+# 实际加热（5V/2A 适配器 + split 通道）
+python3 -u tools/thermal_pid.py --ambient -4 --no-heat 21 \
+  --max-duty 500 --split-heat --enable
 
-# 5V/3A 以上：60% 总功率，默认 balanced
-python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
-  --enable --max-duty 600 --hold-duty 350
+# -20 °C 冷室：无加热结温需现场实测。max_duty 500 通常不够
+python3 -u tools/thermal_pid.py --ambient -20 --no-heat 5 \
+  --max-duty 1000 --split-heat --enable
+```
 
-# 调参：Kp/Ki 为 permille/°C 与 permille/(°C*s)
+启动时会打印推导结果，例如：
+
+```text
+[tune] 环境 -20.0 °C / 无加热 5.0 °C -> 自热 25.0 °C, 前馈 603‰ (hold 603‰),
+       Kp 63.5, Ki 1.410, 预热带 5.7 °C, 满功率最高约 68.0 °C
+```
+
+手动给 `--kp/--ki/--kd/--hold-duty/--warmup-band` 仍然生效（工程整定用），
+显式给出的值优先于推导值；不传 `--ambient/--no-heat` 时行为与旧版一致。
+
+### 4.2.1 旧的"手工给 Kp/Ki"用法（仅台架整定）
+
+```sh
+# 调参：Kp/Ki 单位为 permille/°C 与 permille/(°C*s)
 python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
   --kp 60 --ki 1.0 --kd 0 --enable \
   --max-duty 500 --hold-duty 350 --warmup-band 4.0
