@@ -93,10 +93,19 @@ def main():
     parser.add_argument("--mask", type=lambda x: int(x, 0), default=4)
     parser.add_argument("--frequency", type=int, default=100_000)
     parser.add_argument("--web-port", type=int, default=80)
+    parser.add_argument("--poll-hz", type=float, default=20.0,
+                        help="SPI transaction rate in Hz (default 20). "
+                             "The bus is bit-banged in kernel space; at 50 Hz "
+                             "a single-core board corrupts roughly half the "
+                             "seconds with dropped frames. 20 Hz keeps lamp "
+                             "animations smooth and the link quiet.")
     parser.add_argument("--no-web", action="store_true")
     parser.add_argument("--temperature-source", choices=("auto", "sysfs", "reg"),
                         default="auto")
     args = parser.parse_args()
+    if not 1.0 <= args.poll_hz <= 100.0:
+        parser.error("--poll-hz must be 1..100")
+    poll_period = 1.0 / args.poll_hz
 
     ensure_spi4_device()
     configure_spi4_pins()
@@ -217,7 +226,9 @@ def main():
         )
 
         while not stop:
-            readable, _, _ = select.select([stdin_fd], [], [], 0.02)
+            cycle_start = time.monotonic()
+            readable, _, _ = select.select(
+                [stdin_fd], [], [], poll_period)
             if readable:
                 chunk = os.read(stdin_fd, 4096)
                 if not chunk:
@@ -269,6 +280,12 @@ def main():
                 continue
 
             controller.tick(status)
+            # Pace the bus: the frame itself takes ~5 ms of bit-banged time,
+            # so free-running the loop both burns CPU and multiplies the
+            # chances of a preemption corrupting a frame.
+            spent = time.monotonic() - cycle_start
+            if spent < poll_period:
+                time.sleep(poll_period - spent)
             if status.link_state == p.LINK_ACTIVE:
                 thermal.ensure_link_config()
             elif last_link_state == p.LINK_ACTIVE:

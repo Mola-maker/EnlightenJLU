@@ -621,6 +621,8 @@
   });
 
   fetchState().then(fetchHistory);
-  stateTimer = setInterval(fetchState, 250);
-  historyTimer = setInterval(fetchHistory, 1000);
+  // 单核板上 /api/state 要序列化整份状态、/api/history 要序列化数分钟波形，
+  // 250 ms 轮询会把 CPU 占满并让 bit-bang SPI 丢帧，这里降到 1 s / 3 s。
+  stateTimer = setInterval(fetchState, 1000);
+  historyTimer = setInterval(fetchHistory, 3000);
 })();

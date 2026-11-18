@@ -1,0 +1,6 @@
+DEPLOYED
+== 进程 ==
+  340 root     sh -c while true; do     tail -f /dev/null |     python3 -u tools/spi_service.py
+  343 root     python3 -u tools/spi_service.py --hold 1.2 --web-port 80 --frequency 100000
+== 负载 ==
+3.29 4.10 3.98 1/92 360

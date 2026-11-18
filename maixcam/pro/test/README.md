@@ -359,6 +359,28 @@ python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
   --max-duty 500 --hold-duty 350 --warmup-band 4.0
 ```
 
+### SPI 稳定性：为什么要限制事务频率
+
+SPI4 是**内核态 bit-bang**，一帧 64 字节在 100 kHz 下占用约 5 ms 的严格时序。
+`spi_service.py` 的主循环每圈都会发一整帧，所以循环快慢直接等于总线占用率：
+
+| 轮询频率 | 单核 CPU | 现象 |
+|---|---|---|
+| 50 Hz（旧行为，`select` 20 ms 超时后立即发帧） | ~39%，0% idle | 约 40–60% 的秒里出现 `FAULT_SPI(0x4)`，偶发 `LINK_LOST(0x400)+NEED_HELLO(0x10)` → 网页在"已连接/连接中断"之间跳变 |
+| 20 Hz（现在的默认 `--poll-hz 20`） | ~25%，66% idle | 110 秒观测内 `link=3` 0 次、`transaction failed` 0 次；仅剩被重试吸收的瞬时 `0x4`（前端不显示） |
+
+配套改动：网页轮询从 250 ms/1 s 降到 **1 s/3 s**（`/api/state` 要序列化整份状态，
+`/api/history` 要序列化数分钟波形，单核上 4 Hz 会把 CPU 吃满）。
+
+调法：
+
+```sh
+python3 -u tools/spi_service.py --web-port 80 --poll-hz 10   # 更省，灯效动画略粗糙
+```
+
+另外，板上 `/maixapp/apps/launcher`（厂商桌面 UI）常驻占 **39% CPU + 约 90 MB**，
+做温控/灯效实验时建议停掉（它由 `/etc/init.d/S06maixapp` 启动，下次开机会自己回来）。
+
 默认策略：
 
 - **PI 为主，Kd=0**：SG2002 结温约 1.048 s 更新一次，且存在量化噪声；
