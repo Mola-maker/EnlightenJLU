@@ -1,336 +1,143 @@
 # EnlightenJLU
 
-**语音控制的灯牌 PWM 效果**：MaixCAM 负责音频、语音判断和高层表演决策，STM32F103C8T6 负责 15 路灯牌 PWM、安全看门狗和保温板加热执行。
+语音控制的灯牌 PWM + 保温板加热。**MaixCAM 负责音频、语音判断、温控算法与高层决策**，
+**STM32F103C8T6 负责 15 路 PWM（13 路灯牌 + HEAT1/HEAT2）、安全看门狗与硬保护**。
 
-> 当前工作树是清理后的结构。旧 Surplife BLE/HTTP 窗帘代码、旧备份、日志、截图和运行归档没有迁入；原版本仍在一代 MaixCAM Pro 设备和远端 Git 历史中。
+## 1. 接手先看这里
 
-## 1. 系统架构
+| 我想…… | 从这里开始 |
+|---|---|
+| **把设备跑起来**（换 WiFi、找 IP、开网页、SSH） | [`docs/HANDOVER.md`](docs/HANDOVER.md) |
+| 改板上的 Web / 温控代码 | [`maixcam/pro/test/README.md`](maixcam/pro/test/README.md) |
+| 改 STM32 固件或 SPI 协议 | [`stm32/README.md`](stm32/README.md)、[`stm32/docs/SPI_PROTOCOL.md`](stm32/docs/SPI_PROTOCOL.md) |
+| 看验证记录与已知限制 | [`docs/VALIDATION.md`](docs/VALIDATION.md)、[`docs/THERMAL_PID_BRINGUP.md`](docs/THERMAL_PID_BRINGUP.md) |
+| 追溯代码资产来源 | [`docs/ASSET_INVENTORY.md`](docs/ASSET_INVENTORY.md) |
+
+模块级文档：[`maixcam/README.md`](maixcam/README.md) · [`maixcam/pro/README.md`](maixcam/pro/README.md) · [`maixcam/maixcam2/README.md`](maixcam/maixcam2/README.md) · [`model/README.md`](model/README.md) · [`stm32/README.md`](stm32/README.md)
+
+最短上手路径（设备已有固件，只想更新 Python 侧）：
+
+```sh
+git clone https://github.com/Mola-maker/EnlightenJLU.git
+cd EnlightenJLU/maixcam/pro/test
+scp -r . root@<设备IP>:/root/surplife/test/
+ssh root@<设备IP> '/etc/init.d/S99surplife restart'    # 起 Web(80) + KWS
+```
+
+浏览器打开 `http://<设备IP>/`（80 被占用时自动退 8080）；设备 IP 可用
+`http://maixcam-4e47.local/`（mDNS）或看设备屏幕。**换手机热点不用改代码**：
+改 `/boot/wifi.ssid` + `/boot/wifi.pass`（FAT 分区，PC 上直接编辑，密码留空=开放网络）。
+
+## 2. 系统架构
 
 ```text
 麦克风
   ├─ MaixCAM Pro（一代）── Maix-Speech KWS ──┐
   └─ MaixCAM2（二代）──── SenseVoice ASR ───┤
                                              ▼
-                         PERFORM / TEMP / HEARTBEAT（SPI v1）
-                                             │
+                        PERFORM / TEMP / HEARTBEAT（SPI v1，64 字节帧）
                                              ▼
-                              STM32F103C8T6 执行器
+                             STM32F103C8T6 执行器
                         15 路灯牌 PWM + 2 路加热 PWM
-                                             │
                                              ▼
                                 灯牌 / 保温板（6 个功率电阻）
 ```
 
 设计原则：
 
-- 语音识别和判断放在 MaixCAM；
-- STM32 只接受数字化的 `glyph_mask`、动作和温度，不运行语音模型；
-- STM32 上电、未握手、SPI 断链、`ALL_OFF` 时所有输出关闭；
-- 两代 MaixCAM 都保留本地 PWM 作为脱机联调回退，不替代最终 STM32 15 路输出。
+- 语音识别与判断在 MaixCAM，STM32 只接受数字化的 `glyph_mask`、动作与温度；
+- STM32 上电未握手、SPI 断链、`ALL_OFF`、温度无效/超温时，所有输出关闭；
+- 两代 MaixCAM 都保留本地 PWM 作为脱机联调回退，不替代 STM32 的 15 路输出。
 
-## 2. 目录结构
+## 3. 目录结构
 
 ```text
 EnlightenJLU/
-├── README.md
-├── .gitignore
-├── docs/
-│   └── ASSET_INVENTORY.md
-├── model/                         # 模型描述、运行支撑、清单
-│   ├── README.md
-│   ├── manifest.json
-│   ├── maixcam_pro/
-│   └── maixcam2/
+├── docs/            # HANDOVER（上手）/ VALIDATION（验证与限制）/ THERMAL_PID_BRINGUP / ASSET_INVENTORY
+├── model/           # KWS / SenseVoice 描述、运行支撑、清单（大权重外置）
 ├── maixcam/
-│   ├── README.md
-│   ├── pro/                       # 一代 MaixCAM Pro
-│   └── maixcam2/                  # 二代 MaixCAM2
-└── stm32/                         # 15 PWM + 保温板
-    ├── Core/
-    ├── Drivers/
-    ├── cmake/
-    ├── docs/
-    ├── tools/
-    ├── firmware/
-    ├── CMakeLists.txt
-    ├── CMakePresets.json
-    ├── PWM-Heater.ioc
-    └── README.md
+│   ├── pro/         # 一代 MaixCAM Pro：KWS、门控、本地 PWM、触摸 UI
+│   │   └── test/    # ← 当前主线：Web 控制台 + 温控 + SPI 服务（板上 /root/surplife/test）
+│   └── maixcam2/    # 二代 MaixCAM2：SenseVoice、SPI、USB 麦克风
+└── stm32/           # HAL/CMSIS、15 路 PWM、SPI v1、表演引擎、已验证固件
 ```
 
-## 3. 资产总览
+资产数量/大小等明细见 [`docs/ASSET_INVENTORY.md`](docs/ASSET_INVENTORY.md)。
 
-| 目录 | 文件数 | 大小 | 说明 |
-|---|---:|---:|---|
-| `maixcam/pro/` | 17 | 约 256 KB | 一代 KWS、门控、A18/A19 PWM、触摸 UI、温度 |
-| `maixcam/maixcam2/` | 23 | 约 260 KB | 二代 SenseVoice、SPI、USB 麦克风、A30/PWM6、麦克风 UI |
-| `model/` | 18 | 约 1.2 MB | 描述符、SenseVoice 运行支撑、清单；大权重外置 |
-| `stm32/` | 946 | 约 69 MB | HAL/CMSIS、15 路 PWM、SPI v1、表演引擎、协议、已验证固件 |
-| `docs/` | 1 | 约 12 KB | 资产来源、迁移关系、排除项和验证状态 |
+## 4. 快速开始
 
-文件级清单见 [`docs/ASSET_INVENTORY.md`](docs/ASSET_INVENTORY.md)。
-
-## 4. 模型
-
-### MaixCAM Pro（一代）
-
-```text
-/root/models/am_3332_192_int8.mud
-```
-
-Maix-Speech KWS 注册：
-
-```text
-chang1 chang2 chang4
-chun1 chun2 chun3
-ang1 ang2
-chang2 chun1
-```
-
-`ang` 仅调试，不触发。权重只在一代 Pro 设备上，未进入仓库；见 [`model/maixcam_pro/README.md`](model/maixcam_pro/README.md)。
-
-### MaixCAM2（二代）
-
-```text
-/root/models/sensevoice-maixcam2/
-```
-
-SenseVoice 非流式 + 流式模型。仓库已包含除两个 `.axmodel` 权重外的全部运行支撑：
-
-```text
-model/maixcam2/sensevoice-maixcam2/
-```
-
-两个权重约 505 MB，不进入普通 Git；大小和 SHA256 见 [`model/maixcam2/README.md`](model/maixcam2/README.md) 和 [`model/manifest.json`](model/manifest.json)。
-
-## 5. 快速开始
-
-### 5.1 MaixCAM Pro（一代）
+### 4.1 一代 MaixCAM Pro（KWS + 灯牌演出）
 
 ```sh
-cp -a maixcam/pro/app/. /root/surplife/app/
-mkdir -p /root/surplife/run /root/surplife/logs /root/surplife/artifacts
+cp -a maixcam/pro/app/. /root/surplife/app/       # 权重留在 /root/models/am_3332_192_int8.mud
+cd /root/surplife/app && ./run_voice_pwm.sh       # 前台
+./start_voice_pwm.sh                              # 或后台：start / status / stop
+./run_lamp_ui.sh                                  # 触摸 UI（约 128 MB 内存，勿与语音长跑）
 ```
 
-模型保持在 `/root/models/am_3332_192_int8.mud`。
-
-```sh
-cd /root/surplife/app
-./run_voice_pwm.sh
-```
-
-后台管理：
-
-```sh
-./start_voice_pwm.sh
-./status_voice_pwm.sh
-./stop_voice_pwm.sh
-```
-
-触摸 UI：
-
-```sh
-./run_lamp_ui.sh
-```
-
-一代约 128 MB 内存，后台语音和 UI 不要同时长期运行。
-
-### 5.2 MaixCAM2（二代）
+### 4.2 二代 MaixCAM2（SenseVoice + 本地临时灯效）
 
 ```sh
 cp -a maixcam/maixcam2/. /root/JLU_LEDLAB/
+cp -a model/maixcam2/sensevoice-maixcam2/. /root/models/sensevoice-maixcam2/
+cd /root/JLU_LEDLAB && ./start_usb_local.sh       # ./stop.sh 停止
+./audio_ui/run_mic_ui.sh                          # 麦克风可视化（与语音业务互斥）
 ```
 
-准备模型支撑：
+### 4.3 STM32 固件
 
 ```sh
-cp -a model/maixcam2/sensevoice-maixcam2/. \
-      /root/models/sensevoice-maixcam2/
-cp model/maixcam2/sensevoice.mud \
-   /root/JLU_LEDLAB/config/sensevoice.mud
+cd stm32 && cmake --preset Release && cmake --build --preset Release
+st-flash --reset write firmware/PWM-Heater-web.bin 0x08000000    # Web 直控固件
 ```
 
-两个 SenseVoice 权重从已有设备/受控存储另行放置。
+构建/硬件/协议细节：[`stm32/docs/BUILD.md`](stm32/docs/BUILD.md)、
+[`stm32/docs/HARDWARE.md`](stm32/docs/HARDWARE.md)、
+[`stm32/docs/SPI_PROTOCOL.md`](stm32/docs/SPI_PROTOCOL.md)。
 
-临时“长春”语音 + 本地 A30/PWM6 灯效：
+## 5. 温控：操作者只填两个温度
+
+`Kp/Ki/Kd` 属于实现细节，**不再作为用户输入**。使用者只提供：
+
+| 输入 | 含义 |
+|---|---|
+| `环境温度` | 测试环境（冷室 / 房间）温度 |
+| `无加热结温` | 加热全关时板子稳定后的结温（含 SoC 自热） |
+
+`thermal_tuning.py` 用一阶+纯滞后模型推导前馈占空比、预热带与 PI 增益，再下发给
+STM32 执行。校准来自 2026-11-17 实测：同一工况自动推导出 `hold 349‰ / Kp 63.5 /
+Ki 1.41 / 预热带 3.3 °C`，与当时手工整定的 `350‰ / 60 / 1.0 / 4 °C` 一致。
+目标不可达时会明确告警并给出满功率预计最高温度。
 
 ```sh
-cd /root/JLU_LEDLAB
-./start_usb_local.sh
+curl -X POST http://<设备IP>/api/thermal -H 'Content-Type: application/json' \
+  -d '{"ambient_c":-20,"no_heat_junction_c":5,"max_duty":1000,"enabled":false}'
+curl -s http://<设备IP>/api/thermal        # 看推导结果与警告
 ```
 
-停止：
+详见 [`maixcam/pro/test/README.md`](maixcam/pro/test/README.md) §4.2 与
+[`docs/HANDOVER.md`](docs/HANDOVER.md) §5（−20 °C 冷室注意事项）。
 
-```sh
-./stop.sh
-```
+## 6. 必须知道的约束
 
-麦克风实时可视化 UI：
+- **SPI4 独占**：`spi_service.py`（Web + 灯牌 + 温控）与 `thermal_pid.py` /
+  `temp_monitor.py` 不能同时运行，抢锁会报 `SPI bus 4 is already owned`。
+  跑命令行 PID 前先 `/etc/init.d/S99surplife stop`，跑完再 `start`；
+- **USB-C 角色**：`S99surplife start` 会把 USB-C 切成 host（为 USB 麦克风），
+  若还要用 USB-NCM 网口，改用 `/root/surplife/start_web_only.sh`；
+- **USB 麦克风独占**：语音业务与麦克风 UI 不能同时占用；
+- **供电**：默认 `max_duty 500‰`（5V/2A 保守值）；600‰ balanced 需 5V/3A 以上，
+  5V/2A 场景用 `--split-heat`；长时间高功率建议 5V/5A 或间歇加热；
+- **不要提交**密钥、密码、个人录音或 token。
 
-```sh
-cd /root/JLU_LEDLAB/audio_ui
-./run_mic_ui.sh
-```
+## 7. 已知限制（摘要）
 
-麦克风 UI 和语音业务都使用 USB capture，不能同时运行。
+灯牌实际光输出待现场确认；ST-Link NRST 未接；保温板长时稳定性受电源/热耦合限制；
+无过流硬件保护；一代 Pro 权重只在设备上；校园网有客户端隔离，设备与 PC 无法互访。
 
-### 5.3 STM32
+完整清单与烧录校验记录见 [`docs/VALIDATION.md`](docs/VALIDATION.md)。
 
-```sh
-cd stm32
-cmake --preset Release
-cmake --build --preset Release
-```
+## 8. 许可与第三方代码
 
-烧录已验证固件：
-
-```sh
-st-flash --reset write stm32/firmware/PWM-Heater.bin 0x08000000
-```
-
-文档：
-
-- [`stm32/README.md`](stm32/README.md)
-- [`stm32/docs/BUILD.md`](stm32/docs/BUILD.md)
-- [`stm32/docs/SPI_PROTOCOL.md`](stm32/docs/SPI_PROTOCOL.md)
-- [`stm32/docs/HARDWARE.md`](stm32/docs/HARDWARE.md)
-
-## 6. 当前功能
-
-### MaixCAM Pro
-
-- Maix-Speech 单字/整词 KWS；
-- 单字 `chang`/`chun` 时序拼装，整词 `chang2 chun1` 直接开门；
-- A18/PWM6、A19/PWM7 本地 1 kHz 灯效；
-- 待机呼吸、30 ms 上升、保持、2.5 s 释放、10 s 肺活量彩蛋；
-- 触摸调试 UI；
-- SG2002 温度读取。
-
-### MaixCAM2
-
-- SenseVoice 中文/多语种 ASR；
-- “长/春/长春”字符族和整词匹配；
-- USB 外接麦克风 + `snd-usb-audio`；
-- SPI2/CS1 v1 主机传输；
-- A30/PWM6 本地临时表演；
-- 640×480 麦克风电平/波形/频谱 UI；
-- 13 字标语评测和 USB 麦克风测试记录。
-
-### STM32
-
-- 15 路 PWM：13 路灯牌 + HEAT1/HEAT2；
-- “长”→PWM1，“春”→PWM2；
-- STANDBY/INTRO/HOLD/RELEASE/EGG/OFF；
-- SPI v1 固定 64 字节帧、TLV、CRC16、会话/序号去重；
-- 500 ms 链路超时全关；
-- TEMP 接收和 STATUS 回显；
-- Python Web 控制台（80/8080）改为聚焦波形监测：13 路灯牌热力波形 + 关键词状态；温度/HEAT duty 双曲线 + PID 锚点/环境温度/裕度；不再提供冗余预设动作；
-- Web 直控需要 `firmware/PWM-Heater-web.bin`（`SET_LAMPS`）；
-- 温控 PID 在 `maixcam/pro/test/tools/thermal_pid.py` 命令行端运行，
-  STM32 执行 HEAT1/HEAT2，并在未配置、温度无效/过期、过温、链路丢失时强制 0%；
-- 控制参数由设备自动整定：操作者只填**环境温度**和**无加热结温**，设备按
-  `thermal_tuning.py` 的物理模型推导前馈占空比、预热带与 PI 增益（Kp/Ki 不再
-  暴露给使用者）；默认工况（−4 °C / 无加热 21 °C）推导出 hold 349‰、Kp 63.5、
-  Ki 1.41，与 2026-11-17 手工整定的 350‰/60/1.0 一致；
-- 默认 PI（Kd=0），目标 43 °C，硬上限 46 °C；加热上限默认 500‰（5V/2A
-  适配器保守值）；P 项使用 45 s 斜率滤波和 90 s 温度预测，补偿 SoC
-  传感器/加热板的长滞后；
-- HEATER duty 是两路合计功率；默认 balanced（两路同 duty），`--split-heat`
-  时拆成 HEAT1/HEAT2（600‰ -> 1000/200）以适配 5V/2A；600‰ balanced 需要
-  5V/3A 以上电源；
-- SPI 链路恢复时 HELLO + THERMAL_CONFIG 合并到同一帧；连续坏帧会重新打开
-  `/dev/spidev4.0`，日志同时打印 STM32 uptime/复位次数和真实链路状态。
-
-## 7. 已验证状态和限制
-
-2026-11-04 已用 ST-Link V2 烧录 STM32 固件并读回校验：
-
-```text
-PWM-Heater.bin
-SHA256 4dd2531314719912d362bdd68c30d4070f1af02e951cdb218111c1f67ebab609
-```
-
-烧录后读到：
-
-```text
-TIM2 CR1=0x00000001 PSC=35 ARR=999  CCR1..4=0
-TIM4 CR1=0x00000081 PSC=8  ARR=399  CCR1..3=0
-```
-
-说明新固件运行，15 路输出和 6 个功率电阻全关。
-
-2026-11-06 已用同一 ST-Link V2 烧录 MaixCAM Pro 测试扩展固件并校验通过：
-
-```text
-PWM-Heater-test.bin
-SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
-```
-
-该固件包含 `GLYPH_ALL_LAMPS`（PWM1–PWM13，排除 HEAT1/2）、USART3 `[temp]`
-打印，以及按最大占空比聚合灯牌输出的修正。
-
-2026-11-08 已完成 MaixCAM Pro 整机联调：
-
-- Web 固件 `PWM-Heater-web.bin` 已烧录并校验，SHA256
-  `43836bb9bf82606f2734896d7902df2f8c76f5d53cd548f07f941c3e00c05450`；
-- `direct_ready=true`，13 路 0–100% 亮度直控可用；
-- 温控执行器已加入 `THERMAL_CONFIG` / `HEATER`，HEAT1/HEAT2 可由 PID 命令控制；
-- 软件 SPI4 采用 **100 kHz**；STM32 改为软件 NSS（单从机），解决外部 CS
-  接触/片选导致的整帧超时；
-- KWS 使用 USB 麦克风 card 2，10 cm / 30 cm「哈喽」可触发，
-  触发后 `active_mask=0x4`、PWM1–PWM13 执行 GATE/RELEASE；
-- `/etc/init.d/S99surplife` 开机自动切换 USB host、启动 KWS + Web 服务；
-- `tools/spi_service.py` 以 1 Hz 读取 SG2002 结温并发送 TEMP TLV，
-  STATUS 回传 `temp_mc`（约 49 °C，`temp_valid=true`），USART3 可观察；
-- PID 调试改用命令行 `tools/temp_monitor.py` 实时打印结温，支持
-  text/CSV/JSON 和滚动 min/max/avg；Web 控制台不再作为温度调试入口；
-- 温控命令行 `tools/thermal_pid.py` 支持 `--ambient/--no-heat` 自动整定、
-  dry-run、`--enable`、最大总功率、坡度预测、积分窗口和过温保护；
-  手工 `--kp/--ki/--kd/--hold-duty/--warmup-band` 仅用于台架整定；
-  2026-11-18 多次复现“duty 回读仍为 600/500、STM32 未复位、温度反降”，
-  定位为 5V 适配器/加热支路进入热保护；split 可降低峰值，但长时间高功率
-  仍需稳定 5V/5A 级电源或间歇加热；
-- 应用黑屏根因是 `rcS` 的 `S??*` 通配符把 `S06maixapp.*.bak` 当成启动脚本，
-  多个 launcher 同时抢占 `/dev/cvi-vo`；备份已移到 `/root/surplife/init_backups`。
-
-已知限制：
-
-- 13 路灯牌的实际光输出尚未现场确认（SPI 控制链和 PWM 命令已验证）；
-- ST-Link NRST 尚未接，建议后续调试补上；
-- 保温板温度闭环仍在调参：HEAT 执行、固件保护和暖启动 PI 已实现；
-  600‰ 下已观察到明显热响应，但长时稳定性还取决于电源余量、SPI 接触和
-  加热器/传感器热耦合；
-- 过流硬件保护尚未实现；
-- 一代 Pro 权重只存在设备上；
-- 语音业务和麦克风 UI 不能同时占用 USB 麦克风；
-- 1 m 远场「哈喽」当前概率约 0.03，低于 0.12 阈值；10/30 cm 稳定；
-- 网页显示 `faults` 偶发瞬时 `0x4`，下一次合法帧清除；
-- 不提交密钥、密码、个人语音录音或 token。
-
-## 8. 旧代码清理说明
-
-已从工作树移除：
-
-- `surplife/archive/`、日志、截图、PID/FIFO 和临时音频；
-- 与灯牌 PWM 无关的 Surplife BLE/HTTP 窗帘控制；
-- `light-dots`、主机端关键词记录器、旧 `maixcam` 姿态示例；
-- `__pycache__`、构建产物和本地模型副本。
-
-原版本仍可从一代 MaixCAM Pro 的 `/root/surplife/app` 和远端 Git 历史追溯。
-
-## 9. 相关文档
-
-- [`docs/HANDOVER.md`](docs/HANDOVER.md) —— **接手/上手指南**：换 WiFi（含开放 SSID）、找设备 IP、服务互斥关系、−20 °C 冷室标定注意事项、校园网实测结论
-- [`docs/ASSET_INVENTORY.md`](docs/ASSET_INVENTORY.md)
-- [`docs/THERMAL_PID_BRINGUP.md`](docs/THERMAL_PID_BRINGUP.md)
-- [`model/README.md`](model/README.md)
-- [`maixcam/README.md`](maixcam/README.md)
-- [`maixcam/pro/README.md`](maixcam/pro/README.md)
-- [`maixcam/maixcam2/README.md`](maixcam/maixcam2/README.md)
-- [`stm32/README.md`](stm32/README.md)
-- [`stm32/docs/SPI_PROTOCOL.md`](stm32/docs/SPI_PROTOCOL.md)
-- [`stm32/docs/HARDWARE.md`](stm32/docs/HARDWARE.md)
-
-## 10. 许可与第三方代码
-
-STM32 HAL/CMSIS、MaixPy/MaixCDK、SenseVoice 支撑代码及其他第三方组件遵循各自许可证；使用前请核对原始项目许可。本仓库不额外声明第三方代码的所有权。
+STM32 HAL/CMSIS、MaixPy/MaixCDK、SenseVoice 支撑代码等第三方组件遵循各自许可证，
+使用前请核对原始项目许可；本仓库不额外声明第三方代码的所有权。
