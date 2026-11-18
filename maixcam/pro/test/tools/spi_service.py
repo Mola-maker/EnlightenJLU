@@ -40,6 +40,7 @@ from spi_link import Stm32SpiLink, SpiTransactionError  # noqa: E402
 from thermal_control import ThermalController  # noqa: E402
 from web_control import LampController  # noqa: E402
 from console_web import create_console_app  # noqa: E402
+import wifi_config  # noqa: E402
 
 try:
     from sg2002_temp import sample as read_temperature  # noqa: E402
@@ -74,7 +75,7 @@ def start_web(state_fn, history_fn, lamp, thermal, preferred):
 
     port = available_port(preferred)
     app = create_console_app(
-        state_fn, history_fn, lamp, thermal, WEB_DIR, port)
+        state_fn, history_fn, lamp, thermal, WEB_DIR, port, wifi_config)
     server = make_server("0.0.0.0", port, app, threaded=True)
 
     def serve():

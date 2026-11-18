@@ -17,6 +17,7 @@
         <button class="mode" type="button" data-view="heat"><span>02</span>加热波形</button>
         <button class="mode" type="button" data-view="pid"><span>03</span>PID 锚点</button>
         <button class="mode" type="button" data-view="kws"><span>04</span>关键词识别</button>
+        <button class="mode" type="button" data-view="net"><span>05</span>网络</button>
       </nav>
       <div class="rail-bottom">
         <div class="rail-state"><i class="dot" id="railDot"></i><span id="railLink">连接中</span></div>
@@ -217,6 +218,37 @@
           <div class="pid-footer">
             <span id="pidNote">填入环境温度和无加热结温后点应用，加热策略由设备自行计算。</span>
             <button class="primary-button" id="applyPid" type="button">应用参数</button>
+          </div>
+        </article>
+
+        <article class="card pid-card view-card" id="netCard" data-view="net">
+          <div class="card-heading">
+            <div>
+              <h2>WiFi 设置</h2>
+              <p class="card-sub">换手机热点/换路由器时在这里改，设备会自行重连</p>
+            </div>
+            <span class="small-status" id="netStatus">—</span>
+          </div>
+
+          <div class="anchor-grid">
+            <div><span>当前 SSID</span><strong id="netSsidShown">—</strong></div>
+            <div><span>当前 IP</span><strong id="netIpShown">—</strong></div>
+            <div><span>已保存 SSID</span><strong id="netSavedShown">—</strong></div>
+            <div><span>网络类型</span><strong id="netOpenShown">—</strong></div>
+          </div>
+
+          <form id="wifiForm" class="pid-form">
+            <label>SSID<input id="wifiSsidInput" type="text" autocomplete="off" spellcheck="false"></label>
+            <label>密码（开放网络留空）<input id="wifiPassInput" type="password" autocomplete="new-password"></label>
+          </form>
+
+          <p class="card-sub" id="wifiHint">
+            保存后设备会用新凭据重连；当前页面会断开，请把电脑/手机也切到同一热点，再用新 IP 打开本页。
+            连不上时可用 USB 网线或直接改启动分区的 <code>wifi.ssid</code> / <code>wifi.pass</code>。
+          </p>
+          <div class="pid-footer">
+            <span id="wifiNote"></span>
+            <button class="primary-button" id="applyWifi" type="button">保存并重连</button>
           </div>
         </article>
       </section>

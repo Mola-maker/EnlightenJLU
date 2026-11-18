@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def create_console_app(state_fn, history_fn, lamp, thermal, web_dir: Path,
-                       port: int):
+                       port: int, wifi=None):
     from flask import Flask, Response, jsonify, request, send_from_directory
 
     app = Flask(__name__, static_folder=str(web_dir), static_url_path="/static")
@@ -73,6 +73,37 @@ def create_console_app(state_fn, history_fn, lamp, thermal, web_dir: Path,
             return jsonify(thermal.configure(payload))
         except (TypeError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 400
+
+    @app.get("/api/wifi")
+    def wifi_state():
+        """Current association plus the credentials that are configured."""
+        if wifi is None:
+            return jsonify({"error": "wifi control unavailable"}), 501
+        return jsonify(wifi.read_state())
+
+    @app.post("/api/wifi")
+    def wifi_command():
+        """Overwrite the board's WiFi credentials and reconnect.
+
+        Body: ``{"ssid": "...", "password": "..."}`` (empty password = open
+        network).  The reply is sent before the link is reloaded, so a client
+        on the old network sees the 202 and then loses the connection on
+        purpose -- reconnect to the new network to reach the board again.
+        """
+        if wifi is None:
+            return jsonify({"error": "wifi control unavailable"}), 501
+        payload = request.get_json(silent=True) or {}
+        try:
+            state = wifi.write(str(payload.get("ssid", "")),
+                               str(payload.get("password", "")))
+        except (TypeError, ValueError, OSError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        wifi.apply_async()
+        return jsonify({
+            "accepted": True,
+            "message": "已写入，设备将在几秒内重连新网络",
+            "wifi": state,
+        }), 202
 
     @app.get("/api/stream")
     def stream():

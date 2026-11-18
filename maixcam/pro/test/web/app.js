@@ -22,6 +22,7 @@
     heat: { eyebrow: "MAIXCAM · STM32 · HEATER WAVEFORM", title: "加热波形" },
     pid: { eyebrow: "PID · ANCHOR / MARGIN", title: "PID 锚点" },
     kws: { eyebrow: "KWS · KEYWORD RECOGNITION", title: "关键词识别" },
+    net: { eyebrow: "WIFI · CREDENTIALS", title: "网络" },
   };
   let currentView = "lamp";
   const state = {
@@ -77,6 +78,7 @@
     document.querySelectorAll(".mode[data-view]").forEach((button) => {
       button.classList.toggle("is-active", button.dataset.view === name);
     });
+    if (name === "net") loadWifi();
     document.querySelectorAll(".view-card[data-view]").forEach((card) => {
       card.classList.toggle("is-active", card.dataset.view === name);
     });
@@ -224,6 +226,67 @@
       $("#marginInput").value = t.margin_c;
       $("#maxInput").value = t.max_duty;
     }
+  }
+
+  let wifiPoll = null;
+
+  function renderWifi(data) {
+    const d = data || {};
+    $("#netSsidShown").textContent = d.current_ssid || "未连接";
+    $("#netIpShown").textContent = d.ip || "—";
+    $("#netSavedShown").textContent = d.configured_ssid || "未配置";
+    $("#netOpenShown").textContent = d.open_network ? "开放网络" : "WPA2";
+    const linked = Boolean(d.current_ssid);
+    $("#netStatus").textContent = linked
+      ? (d.current_ssid === d.configured_ssid ? "已连接" : "连着其它网络")
+      : "未连接";
+    $("#netStatus").className = `small-status ${linked ? "on" : "warn"}`;
+    if (document.activeElement !== $("#wifiSsidInput")) {
+      $("#wifiSsidInput").value = d.configured_ssid || "";
+    }
+  }
+
+  function loadWifi() {
+    fetch("/api/wifi", { cache: "no-store" })
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(renderWifi)
+      .catch(() => {
+        $("#netStatus").textContent = "不支持";
+        $("#netStatus").className = "small-status warn";
+        $("#wifiNote").textContent = "该设备未启用网络设置接口。";
+      });
+  }
+
+  function applyWifi() {
+    const ssid = $("#wifiSsidInput").value.trim();
+    const password = $("#wifiPassInput").value;
+    if (!ssid) {
+      toast("SSID 不能为空", true);
+      return;
+    }
+    if (password && (password.length < 8 || password.length > 63)) {
+      toast("WPA 密码需 8-63 位；开放网络请留空", true);
+      return;
+    }
+    if (!window.confirm(`保存并重连到 "${ssid}"？\n\n当前连接会断开，` +
+                        `需要把电脑也切到该热点后再用新 IP 打开本页。`)) {
+      return;
+    }
+    $("#wifiNote").textContent = "正在写入并重连…";
+    postJson("/api/wifi", { ssid, password })
+      .then((data) => {
+        $("#wifiPassInput").value = "";
+        renderWifi(data.wifi);
+        $("#wifiNote").textContent = data.message || "已写入";
+        toast("已保存，设备正在重连新网络");
+      })
+      .catch((e) => {
+        $("#wifiNote").textContent = "";
+        toast(e.message, true);
+      });
   }
 
   function render() {
@@ -550,6 +613,7 @@
 
   $("#pidForm").addEventListener("input", () => { pidDirty = true; });
   $("#applyPid").addEventListener("click", applyPid);
+  $("#applyWifi").addEventListener("click", applyWifi);
 
   window.addEventListener("resize", () => {
     drawLampChart();

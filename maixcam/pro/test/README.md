@@ -131,12 +131,18 @@ http://192.168.43.229/
    环境温度、无加热结温、自热温升、setpoint 43 °C、裕度 ±3 °C、前馈占空比，
    以及**只读**的自动 Kp/Ki、预热带、满功率可达温度和 P/I/D 实时项。
 
-左侧栏是真正的四页导航，一次只显示当前功能：
+左侧栏是真正的分页导航，一次只显示当前功能：
 
 1. 灯牌波形；
 2. 加热波形；
-3. PID 锚点；
-4. 关键词识别。
+3. 加热控制（环境温度 + 无加热结温 → 自动整定）；
+4. 关键词识别；
+5. 网络（改 WiFi 的 SSID/密码，设备自行重连）。
+
+网络页是交接关键：使用者不需要登录 shell，也不必把 TF 卡插到电脑上，
+在浏览器里填自己热点的 SSID/密码即可（`POST /api/wifi` 会同时更新
+`/etc/wifi.ssid`、`/etc/wifi.pass` 与 `/etc/wifi.networks` 并触发
+`S99wifi-retry`，旧文件留 `.bak`）。
 
 页面只保留灯效波形选择、整体亮度、关键词待机和加热使能/PID 参数应用；
 不再提供预设动作按钮，也不再把四个功能同时堆在一页。
@@ -149,6 +155,8 @@ GET  /api/history    lamp 12 s 波形 + thermal 5 min 波形
 POST /api/lamp       effect / kws / off
 GET  /api/thermal    当前自动整定结果（前馈占空比 / Kp / Ki / 预热带 / 可达性）
 POST /api/thermal    ambient_c / no_heat_junction_c / setpoint_c / margin_c / max_duty / enabled
+GET  /api/wifi       当前 SSID / IP / 已保存凭据 / 候选网络
+POST /api/wifi       ssid + password（密码留空=开放网络）；写入后设备自行重连，当前连接会断开
 ```
 
 示例：
@@ -167,6 +175,12 @@ curl -X POST http://192.168.43.229/api/thermal \
 curl -X POST http://192.168.43.229/api/thermal \
   -H 'Content-Type: application/json' \
   -d '{"ambient_c":-20,"no_heat_junction_c":5,"max_duty":1000,"enabled":false}'
+
+# 换 WiFi（也可以直接在网页"网络"页填）
+curl -X POST http://192.168.43.229/api/wifi \
+  -H 'Content-Type: application/json' \
+  -d '{"ssid":"MyPhone","password":"myhotspot123"}'
+curl -s http://192.168.43.229/api/wifi          # 看当前连的/已保存的
 ```
 
 默认加热是关闭的；勾选页面“加热使能”或 POST `enabled:true` 才会实际

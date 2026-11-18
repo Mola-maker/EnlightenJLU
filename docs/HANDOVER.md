@@ -63,12 +63,26 @@ python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 --enable \
 2. 单网络：`/etc/wifi.ssid` + `/etc/wifi.pass`；
 3. 以上缺失时回退 `/boot/wifi.ssid` + `/boot/wifi.pass`。
 
-推荐配置（热点优先，校园网兜底；`/boot` 是 FAT，PC 上直接编辑）：
+**三条改 WiFi 的路（按方便程度）**：
+
+1. **网页里改（推荐，交接首选手法）**：Web 控制台左侧「网络」页填 SSID/密码点保存，
+   设备会自己重连。等价接口：
+   ```bash
+   curl -X POST http://<设备IP>/api/wifi -H 'Content-Type: application/json' \
+     -d '{"ssid":"MyPhone","password":"myhotspot123"}'   # 密码留空=开放网络
+   curl -s http://<设备IP>/api/wifi                       # 看当前/已保存/候选
+   ```
+   ⚠️ 保存后当前连接会断开，这是设计如此：把电脑也切到该热点，再用新 IP 打开页面。
+2. **改启动分区（设备完全连不上时）**：`/boot/wifi.ssid` + `/boot/wifi.pass`，
+   或 `/boot/wifi.networks`（每行 `SSID|密码`，顺序即优先级）。FAT 分区，PC 上直接编辑。
+3. **shell**：`/etc/wifi.ssid` / `/etc/wifi.pass` 后 `/etc/init.d/S99wifi-retry start`。
+
+候选表示例（一般只写自己手机热点即可；校园网这类有客户端隔离、又需要门户认证的网络
+写了也用不上）：
 
 ```text
 # /boot/wifi.networks
-Jl521522|手机热点密码
-JLU.PC|
+MyPhone|myhotspot123
 ```
 
 **`/boot` 是 FAT 分区，可以直接把 TF 卡/启动分区挂到 Windows 上编辑**（纯文本，无引号）：
