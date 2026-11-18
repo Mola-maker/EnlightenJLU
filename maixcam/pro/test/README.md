@@ -159,7 +159,7 @@ curl -X POST http://192.168.43.229/api/lamp \
 
 curl -X POST http://192.168.43.229/api/thermal \
   -H 'Content-Type: application/json' \
-  -d '{"setpoint_c":43,"margin_c":3,"ambient_c":-4,"anchor_c":21,"kp":60,"ki":1,"kd":0,"max_duty":600,"hold_duty":350,"enabled":false}'
+  -d '{"setpoint_c":43,"margin_c":3,"ambient_c":-4,"anchor_c":21,"kp":60,"ki":1,"kd":0,"max_duty":500,"hold_duty":170,"enabled":false}'
 ```
 
 默认加热是关闭的；勾选页面“加热使能”或 POST `enabled:true` 才会实际
@@ -269,8 +269,10 @@ python3 -u tools/temp_monitor.py --interval 1
 ### 4.1.3 温控 PID（命令行）
 
 PID 在 MaixCAM 命令行端计算，STM32 只执行 HEAT1/HEAT2 并做硬安全保护。
-当前推荐参数是 `--max-duty 600`、`--hold-duty 350`，即冷启动允许 60%
-加热，接近目标时从 35% 开始 PI：
+5V/2A 适配器建议用 `--max-duty 500 --hold-duty 170 --split-heat`；
+5V/3A 以上电源可用 `--max-duty 600 --hold-duty 170`（默认 balanced）。
+duty 是两路合计功率：balanced 两路同 duty，split 拆成 HEAT1=1000‰、
+HEAT2=0/200‰，避免 5V 母线出现 3A 峰值：
 
 ```sh
 cd /root/surplife/test
@@ -278,14 +280,18 @@ cd /root/surplife/test
 # 默认 dry-run：只打印 P/I/D，不加热
 python3 -u tools/thermal_pid.py --setpoint 43 --margin 3
 
-# 允许加热，60% 上限，暖启动后从 35% 保持点开始 PI
+# 5V/2A 适配器：50% 总功率 + split 通道
 python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
-  --enable --max-duty 600 --hold-duty 350
+  --enable --max-duty 500 --hold-duty 170 --split-heat
+
+# 5V/3A 以上：60% 总功率，默认 balanced
+python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
+  --enable --max-duty 600 --hold-duty 170
 
 # 调参：Kp/Ki 为 permille/°C 与 permille/(°C*s)
 python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
   --kp 60 --ki 1.0 --kd 0 --enable \
-  --max-duty 600 --hold-duty 350 --warmup-band 2.0
+  --max-duty 500 --hold-duty 170 --warmup-band 4.0
 ```
 
 默认策略：
@@ -294,11 +300,18 @@ python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
   热对象时间常数长，D 项通常放大噪声，先不启用；
 - **暖启动**：离目标超过 `--warmup-band` 时用 `--max-duty` 开环加热，
   积分器固定在 `--hold-duty`，不会把饱和输出累积进积分；进入目标前
-  2 °C 后从保持占空比开始 PI；
+  4 °C 后从保持占空比开始 PI；
+- **预测刹车**：P 项使用最近 45 s 的线性拟合斜率和 90 s 预测温度，
+  在 SoC 传感器到达 43 °C 前提前减小占空比，避免长滞后造成的 3–4 °C
+  过冲；可用 `--slope-window`/`--slope-lookahead` 调整；
 - 进入 PI 后仍使用条件积分：输出已经饱和时冻结积分，避免再次过冲；
 - 目标 43 °C，`--margin 3` 建立 46 °C 硬上限；回落到 45 °C 以下才恢复；
-- `--max-duty` 默认 600（60%），`--hold-duty` 默认 350（35%，会自动
-  裁剪到 `--max-duty` 以下）；不要超过电源和功率电阻的额定值。
+- `--max-duty` 默认 500（50%），`--hold-duty` 默认 170（17%）；
+- 不带 `--split-heat` 时两路同 duty，600‰ 的 5V 峰值约 3A，需要 5V/3A+；
+  5V/2A 必须加 `--split-heat`，此时 600‰ 为 HEAT1=1000‰、HEAT2=200‰，
+  500‰ 为 1000/0；
+- 若 duty 回读一直 600/500 但温度反降，说明电源或电阻组进入热保护，
+  不能靠继续调 PID 解决。
 
 日志中的 `up=` 是 STM32 运行秒数，`rst=` 是检测到的复位次数，
 `fault=0x....` 是 STATUS 故障位，`link=DOWN` 表示最后一次 SPI 事务已失败，
@@ -317,9 +330,11 @@ python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
 
 2026-11-17 实测：`--max-duty 600` 时结温可以从约 35 °C 升到 43 °C；
 但第二次运行约 29 s 后 STM32 状态变为 `flags=0x00`，随后 SPI 连续
-`bad magic`。这说明控制器本身没有触发过温/未配置保护，问题在链路或
-STM32 供电/复位。新版日志已加入 uptime/复位计数和真实 DOWN 状态，
-下一次复现即可区分是 MCU 复位还是 SPI 传输失效。
+`bad magic`。后续定位到 S99 残留 supervisor 可能导致第二个 SPI owner，
+以及 5V/2A 适配器在两组同时 PWM 时承受 3A 峰值。现在已加 SPI 锁和
+HEAT1/HEAT2 通道模式。2026-11-18 split 600‰ 连续 10 分钟结温从
+约 19 °C 升到约 39 °C；但随后多次出现 duty 回读不变、温度反降，
+定位为 5V 适配器/加热支路进入保护，需稳定电源或间歇加热。
 
 ### 4.2 USB 麦克风检查
 

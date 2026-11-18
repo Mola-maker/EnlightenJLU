@@ -20,10 +20,15 @@ DEFAULT_ANCHOR_C = 21.0
 DEFAULT_KP = 60.0
 DEFAULT_KI = 1.0
 DEFAULT_KD = 0.0
-DEFAULT_MAX_DUTY = 600
-DEFAULT_HOLD_DUTY = 350
-DEFAULT_WARMUP_BAND_C = 2.0
+DEFAULT_MAX_DUTY = 500
+DEFAULT_HOLD_DUTY = 170
+DEFAULT_WARMUP_BAND_C = 4.0
 DEFAULT_WARMUP_HYSTERESIS_C = 0.5
+DEFAULT_INTEGRAL_WINDOW_C = 0.6
+DEFAULT_INTEGRAL_SLOW_FACTOR = 0.05
+DEFAULT_SLOPE_WINDOW_S = 45.0
+DEFAULT_SLOPE_LOOKAHEAD_S = 90.0
+DEFAULT_SLOPE_DEADBAND_C_PER_S = 0.003
 HISTORY_SECONDS = 300
 
 
@@ -41,6 +46,12 @@ class ThermalController:
         self.hold_duty = DEFAULT_HOLD_DUTY
         self.warmup_band_c = DEFAULT_WARMUP_BAND_C
         self.warmup_hysteresis_c = DEFAULT_WARMUP_HYSTERESIS_C
+        self.integral_window_c = DEFAULT_INTEGRAL_WINDOW_C
+        self.integral_slow_factor = DEFAULT_INTEGRAL_SLOW_FACTOR
+        self.slope_window_s = DEFAULT_SLOPE_WINDOW_S
+        self.slope_lookahead_s = DEFAULT_SLOPE_LOOKAHEAD_S
+        self.slope_deadband_c_per_s = DEFAULT_SLOPE_DEADBAND_C_PER_S
+        self.split_heat = False
         self.enabled = False
         self.determined_at = "2026-11-17"
         self.config_dirty = True
@@ -71,6 +82,11 @@ class ThermalController:
             hold_duty=min(self.hold_duty, self.max_duty),
             warmup_band_c=self.warmup_band_c,
             warmup_hysteresis_c=self.warmup_hysteresis_c,
+            integral_window_c=self.integral_window_c,
+            integral_slow_factor=self.integral_slow_factor,
+            slope_window_s=self.slope_window_s,
+            slope_lookahead_s=self.slope_lookahead_s,
+            slope_deadband_c_per_s=self.slope_deadband_c_per_s,
         )
 
     # ---- configuration / HTTP commands -------------------------------
@@ -92,7 +108,9 @@ class ThermalController:
         old_pi_parameters = (
             self.setpoint_c, self.margin_c, self.kp, self.ki, self.kd,
             self.max_duty, self.hold_duty, self.warmup_band_c,
-            self.warmup_hysteresis_c,
+            self.warmup_hysteresis_c, self.integral_window_c,
+            self.integral_slow_factor, self.slope_window_s,
+            self.slope_lookahead_s, self.slope_deadband_c_per_s,
         )
         self.setpoint_c = number("setpoint_c", self.setpoint_c, 0.0, 100.0)
         self.margin_c = number("margin_c", self.margin_c, 0.0, 20.0)
@@ -110,15 +128,30 @@ class ThermalController:
             "warmup_band_c", self.warmup_band_c, 0.0, 20.0)
         self.warmup_hysteresis_c = number(
             "warmup_hysteresis_c", self.warmup_hysteresis_c, 0.0, 5.0)
+        self.integral_window_c = number(
+            "integral_window_c", self.integral_window_c, 0.0, 10.0)
+        self.integral_slow_factor = number(
+            "integral_slow_factor", self.integral_slow_factor, 0.0, 1.0)
+        self.slope_window_s = number(
+            "slope_window_s", self.slope_window_s, 3.0, 180.0)
+        self.slope_lookahead_s = number(
+            "slope_lookahead_s", self.slope_lookahead_s, 0.0, 600.0)
+        self.slope_deadband_c_per_s = number(
+            "slope_deadband_c_per_s", self.slope_deadband_c_per_s,
+            0.0, 1.0)
         if "enabled" in payload:
             self.enabled = bool(payload["enabled"])
+        if "split_heat" in payload:
+            self.split_heat = bool(payload["split_heat"])
         if "determined_at" in payload:
             self.determined_at = str(payload["determined_at"])[:40]
 
         new_pi_parameters = (
             self.setpoint_c, self.margin_c, self.kp, self.ki, self.kd,
             self.max_duty, self.hold_duty, self.warmup_band_c,
-            self.warmup_hysteresis_c,
+            self.warmup_hysteresis_c, self.integral_window_c,
+            self.integral_slow_factor, self.slope_window_s,
+            self.slope_lookahead_s, self.slope_deadband_c_per_s,
         )
         if new_pi_parameters != old_pi_parameters:
             self._pi = self._new_pi()
@@ -146,6 +179,7 @@ class ThermalController:
             int(round(self.kd * 100)),
             self.max_duty,
             self.enabled,
+            self.split_heat,
         )
         self.config_dirty = False
         self.config_sent_at = now
@@ -249,6 +283,14 @@ class ThermalController:
             "hold_duty": self.hold_duty,
             "warmup_band_c": self.warmup_band_c,
             "warmup_hysteresis_c": self.warmup_hysteresis_c,
+            "integral_window_c": self.integral_window_c,
+            "integral_slow_factor": self.integral_slow_factor,
+            "slope_window_s": self.slope_window_s,
+            "slope_lookahead_s": self.slope_lookahead_s,
+            "slope_deadband_c_per_s": self.slope_deadband_c_per_s,
+            "split_heat": self.split_heat,
+            "predicted_c": round(self._pi.last.predicted_c, 3),
+            "pi_slope_c_per_s": round(self._pi.last.slope_c_per_s, 5),
             "warmup": self._pi.last.warmup,
             "enabled": self.enabled,
             "duty": round(self.output, 1),

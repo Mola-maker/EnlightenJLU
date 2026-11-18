@@ -30,6 +30,12 @@ class ThermalProtocolTest(unittest.TestCase):
         self.assertEqual(values[6], 1)
         self.assertEqual(values[7], 0)
 
+    def test_thermal_config_split_flag(self):
+        payload = p.thermal_config(43000, 3000, 6000, 100, 0, 500,
+                                   True, split_heat=True)
+        values = struct.unpack("<IIHHHHBB", payload[2:])
+        self.assertEqual(values[7], 1)
+
     def test_heater_layout_and_clamp(self):
         payload = p.heater(1500, True)
         self.assertEqual(payload[0], p.TLV_HEATER)

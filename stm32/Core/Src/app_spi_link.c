@@ -93,6 +93,9 @@ static uint32_t s_last_error_log_ms;
 #define THERMAL_DEFAULT_MAX_DUTY      300U
 
 static uint16_t s_heater_duty;
+static uint16_t s_heater1_duty;
+static uint16_t s_heater2_duty;
+static bool s_heater_split;
 static uint16_t s_heater_max_duty = THERMAL_DEFAULT_MAX_DUTY;
 static int32_t s_thermal_setpoint_mc = THERMAL_DEFAULT_SETPOINT_MC;
 static int32_t s_thermal_margin_mc = THERMAL_DEFAULT_MARGIN_MC;
@@ -135,9 +138,24 @@ static void heater_write(uint16_t duty)
         duty = 1000U;
     }
 
+    /* HEATER carries the *total* heater power, 0..1000 of the 2 x 7.5 W
+       resistor banks.  Balanced mode drives both banks at the same duty.
+       Split mode keeps the same total but uses HEAT1=1000 and the remainder
+       on HEAT2, reducing the 5 V peak current for a 5 V/2 A adapter. */
+    uint16_t heat1 = duty;
+    uint16_t heat2 = duty;
+    if (s_heater_split)
+    {
+        uint16_t doubled = (uint16_t)(duty * 2U);
+        heat1 = (doubled > 1000U) ? 1000U : doubled;
+        heat2 = (uint16_t)(doubled - heat1);
+    }
+
     s_heater_duty = duty;
-    board_pwm_set_duty(BOARD_PWM_HEAT1, duty);
-    board_pwm_set_duty(BOARD_PWM_HEAT2, duty);
+    s_heater1_duty = heat1;
+    s_heater2_duty = heat2;
+    board_pwm_set_duty(BOARD_PWM_HEAT1, heat1);
+    board_pwm_set_duty(BOARD_PWM_HEAT2, heat2);
 }
 
 static void heater_disable(void)
@@ -266,6 +284,7 @@ static void handle_thermal_config(const uint8_t *value, uint8_t length)
     uint16_t kd_x100 = rd16(&value[12]);
     uint16_t max_duty = rd16(&value[14]);
     bool enable = (value[16] != 0U);
+    s_heater_split = (value[17] == 1U);
 
     if (setpoint_mc > 100000U || margin_mc > 20000U || max_duty > 1000U)
     {
@@ -289,14 +308,15 @@ static void handle_thermal_config(const uint8_t *value, uint8_t length)
 
     app_debug_printf(
         "[thermal] config sp=%ldmC margin=%ldmC kp=%u ki=%u kd=%u "
-        "max=%u en=%u\r\n",
+        "max=%u en=%u split=%u\r\n",
         (long)s_thermal_setpoint_mc,
         (long)s_thermal_margin_mc,
         (unsigned int)kp_x100,
         (unsigned int)ki_x100,
         (unsigned int)kd_x100,
         (unsigned int)s_heater_max_duty,
-        enable ? 1U : 0U);
+        enable ? 1U : 0U,
+        s_heater_split ? 1U : 0U);
 }
 
 static uint16_t crc16_ccitt(const uint8_t *data, uint32_t length)
@@ -834,6 +854,9 @@ void app_spi_link_init(uint32_t now_ms)
     s_temp_source = 0xFFU;
     s_last_error_log_ms = now_ms;
     s_heater_duty = 0U;
+    s_heater1_duty = 0U;
+    s_heater2_duty = 0U;
+    s_heater_split = false;
     s_heater_max_duty = THERMAL_DEFAULT_MAX_DUTY;
     s_thermal_setpoint_mc = THERMAL_DEFAULT_SETPOINT_MC;
     s_thermal_margin_mc = THERMAL_DEFAULT_MARGIN_MC;

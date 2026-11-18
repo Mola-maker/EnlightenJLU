@@ -20,7 +20,17 @@ therefore uses the warm-start controller in ``thermal_pi.py``:
   the integrator is held at ``hold_duty``;
 * inside the band the PI starts from ``hold_duty`` instead of the accumulated
   saturation value;
-* integral action is frozen whenever the total output is already saturated.
+* integral action is frozen whenever the total output is already saturated,
+  and is trimmed only slowly while the measured error is larger than
+  ``--integral-window`` (the 1 Hz sensor often sits on a quantised plateau);
+* the P term uses a filtered slope and ``--slope-lookahead`` seconds of
+  prediction to brake before the delayed sensor reaches the setpoint.
+
+The requested duty is the total heater power, not per channel.  The STM32
+splits it across HEAT1/HEAT2, e.g. 600 -> 1000/200, so a 5 V/2 A supply sees
+1.8 A peak instead of 3 A.  A 5 V/2 A adapter is still marginal at 600;
+``--max-duty 500`` is the conservative default and 600 is intended for a
+5 V/3 A or larger supply.
 
 The SPI link also self-heals: HELLO and THERMAL_CONFIG are sent in the same
 frame after a reset/timeout, and the transport is reopened after repeated bad
@@ -31,9 +41,13 @@ Examples:
     # Dry run: print P/I/D every second, never energize HEAT
     python3 -u tools/thermal_pid.py --setpoint 43 --margin 3
 
-    # Active run: 60% hardware ceiling, 35% holding feed-forward
+    # Active run: 60% total power (5V/3A+ supply recommended)
     python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
-        --enable --max-duty 600 --hold-duty 350
+        --enable --max-duty 600 --hold-duty 170
+
+    # Conservative run on a 5V/2A adapter
+    python3 -u tools/thermal_pid.py --setpoint 43 --margin 3 \
+        --enable --max-duty 500 --hold-duty 170
 
     # More aggressive tuning
     python3 -u tools/thermal_pid.py --kp 80 --ki 1.5 --enable
@@ -73,17 +87,31 @@ def parse_args(argv=None):
                         help="I gain in permille/(C*s), default 1.0")
     parser.add_argument("--kd", type=float, default=0.0,
                         help="optional D gain, default 0 (noise-sensitive)")
-    parser.add_argument("--max-duty", type=int, default=600,
-                        help="HEAT PWM limit 0..1000 permille (default 600)")
+    parser.add_argument("--max-duty", type=int, default=500,
+                        help="HEAT PWM limit 0..1000 permille (default 500; "
+                             "600 needs more than a 5V/2A supply margin)")
     parser.add_argument("--hold-duty", type=int, default=None,
                         help="PI starting/holding duty near the setpoint "
-                             "(default 350, clipped to --max-duty)")
-    parser.add_argument("--warmup-band", type=float, default=2.0,
+                             "(default 170, clipped to --max-duty)")
+    parser.add_argument("--warmup-band", type=float, default=4.0,
                         help="distance below setpoint at which open-loop "
-                             "warm-up hands over to PI (default 2 C)")
+                             "warm-up hands over to PI (default 4 C)")
     parser.add_argument("--warmup-hysteresis", type=float, default=0.5,
                         help="extra distance before warm-up re-arms after a "
                              "drop (default 0.5 C)")
+    parser.add_argument("--integral-window", type=float, default=0.6,
+                        help="full-Ki band around setpoint; outside it only "
+                             "trim slowly to avoid plateau wind-up (default 0.6 C)")
+    parser.add_argument("--integral-slow", type=float, default=0.05,
+                        help="integral rate multiplier outside the window "
+                             "(default 0.05)")
+    parser.add_argument("--slope-window", type=float, default=45.0,
+                        help="least-squares slope window in seconds "
+                             "(default 45)")
+    parser.add_argument("--slope-lookahead", type=float, default=90.0,
+                        help="predictive P lookahead in seconds (default 90)")
+    parser.add_argument("--slope-deadband", type=float, default=0.003,
+                        help="ignore slopes below this in C/s (default 0.003)")
     parser.add_argument("--interval", type=float, default=1.0,
                         help="control period in seconds (default 1.0)")
     parser.add_argument("--count", type=int, default=0,
@@ -92,6 +120,9 @@ def parse_args(argv=None):
                         help="SPI4 clock in Hz (default 100000)")
     parser.add_argument("--source", choices=("auto", "sysfs", "reg"),
                         default="auto", help="temperature source (default auto)")
+    parser.add_argument("--split-heat", action="store_true",
+                        help="use HEAT1=1000 + remainder on HEAT2 for a "
+                             "5V/2A supply; default balanced needs 5V/3A")
     parser.add_argument("--enable", action="store_true",
                         help="actually energize HEAT1/HEAT2; default is dry-run")
     args = parser.parse_args(argv)
@@ -102,7 +133,7 @@ def parse_args(argv=None):
     if not 0 <= args.max_duty <= 1000:
         parser.error("--max-duty must be 0..1000")
     if args.hold_duty is None:
-        args.hold_duty = min(350, args.max_duty)
+        args.hold_duty = min(170, args.max_duty)
     elif not 0 <= args.hold_duty <= 1000:
         parser.error("--hold-duty must be 0..1000")
     elif args.hold_duty > args.max_duty:
@@ -111,6 +142,16 @@ def parse_args(argv=None):
         parser.error("--warmup-band must be >= 0")
     if args.warmup_hysteresis < 0:
         parser.error("--warmup-hysteresis must be >= 0")
+    if args.integral_window < 0:
+        parser.error("--integral-window must be >= 0")
+    if not 0.0 <= args.integral_slow <= 1.0:
+        parser.error("--integral-slow must be 0..1")
+    if args.slope_window < 3.0:
+        parser.error("--slope-window must be >= 3")
+    if args.slope_lookahead < 0:
+        parser.error("--slope-lookahead must be >= 0")
+    if args.slope_deadband < 0:
+        parser.error("--slope-deadband must be >= 0")
     if args.margin < 0:
         parser.error("--margin must be >= 0")
     return args
@@ -234,6 +275,11 @@ def main(argv=None):
         hold_duty=hold_duty,
         warmup_band_c=args.warmup_band,
         warmup_hysteresis_c=args.warmup_hysteresis,
+        integral_window_c=args.integral_window,
+        integral_slow_factor=args.integral_slow,
+        slope_window_s=args.slope_window,
+        slope_lookahead_s=args.slope_lookahead,
+        slope_deadband_c_per_s=args.slope_deadband,
     )
 
     link = None
@@ -250,7 +296,7 @@ def main(argv=None):
         nonlocal last_config_at
         link.set_thermal_config(
             setpoint_mc, margin_mc, kp_x100, ki_x100, kd_x100,
-            max_duty, enabled)
+            max_duty, enabled, args.split_heat)
         last_config_at = now
 
     def request_stop(_signum, _frame):
@@ -284,6 +330,8 @@ def main(argv=None):
             f"Kp={args.kp:.1f}permille/C Ki={args.ki:.2f}permille/(C*s) "
             f"Kd={args.kd:.2f} max={max_duty}permille "
             f"hold={hold_duty}permille warmup={args.warmup_band:.2f}C "
+            f"lookahead={args.slope_lookahead:.0f}s "
+            f"channels={'SPLIT' if args.split_heat else 'BALANCED'} "
             f"heater={'ON' if args.enable else 'DRY-RUN'}",
             flush=True)
 
@@ -293,6 +341,8 @@ def main(argv=None):
             timestamp = time.strftime("%H:%M:%S")
             output = 0.0
             requested_duty = 0
+            predicted_c = 0.0
+            slope_c_per_s = 0.0
 
             try:
                 item = read_temperature(args.source)
@@ -308,11 +358,14 @@ def main(argv=None):
                 i_term = pi.i_term
                 d_term = pi.d_term
                 output = pi.output
+                predicted_c = pi.predicted_c
+                slope_c_per_s = pi.slope_c_per_s
                 requested_duty = int(round(output)) if args.enable else 0
                 link.set_heater(requested_duty, args.enable)
             except Exception as exc:  # noqa: BLE001
                 temp_c = None
                 error_c = p_term = i_term = d_term = output = 0.0
+                predicted_c = slope_c_per_s = 0.0
                 requested_duty = 0
                 controller.suspend()
                 link.set_temp(0, temp_seq, 0, False, 0xFF)
@@ -410,8 +463,9 @@ def main(argv=None):
                          else f"{stm32_uptime_ms / 1000.0:.0f}")
             print(
                 f"{timestamp} T={temp_text}C sp={args.setpoint:6.2f}C "
-                f"err={error_c:+6.2f}C P={p_term:7.2f} I={i_term:7.2f} "
-                f"D={d_term:+6.2f} req={requested_duty:4d} "
+                f"err={error_c:+6.2f}C pred={predicted_c:6.2f}C "
+                f"slope={slope_c_per_s:+.4f}C/s P={p_term:7.2f} "
+                f"I={i_term:7.2f} D={d_term:+6.2f} req={requested_duty:4d} "
                 f"heat={actual_duty:4d} flags=0x{heater_flags:02X} "
                 f"[{decode_heater_flags(heater_flags)}] "
                 f"age={temp_age}ms fault=0x{fault_flags:04X} "

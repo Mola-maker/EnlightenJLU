@@ -60,6 +60,7 @@ class Stm32SpiLink:
         self._thermal_config = None
         self._thermal_config_saved = None
         self._thermal_config_enable = False
+        self._thermal_split_heat = False
         self._thermal_config_pending = False
         self._heater = None
         self._temp = None
@@ -175,14 +176,15 @@ class Stm32SpiLink:
 
     def set_thermal_config(self, setpoint_mc, margin_mc, kp_x100=6000,
                            ki_x100=200, kd_x100=0, max_duty=300,
-                           enable=True):
+                           enable=True, split_heat=False):
         with self._lock:
             config = p.thermal_config(
                 setpoint_mc, margin_mc, kp_x100, ki_x100, kd_x100,
-                max_duty, enable)
+                max_duty, enable, split_heat)
             self._thermal_config = config
             self._thermal_config_saved = config
             self._thermal_config_enable = bool(enable)
+            self._thermal_split_heat = bool(split_heat)
 
     def set_heater(self, duty, enable=True):
         with self._lock:

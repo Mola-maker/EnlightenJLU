@@ -11,8 +11,8 @@
 
 | 文件 | SHA256 |
 |---|---|
-| `PWM-Heater-web.hex` | `0dee429b31e58d12d01b1a73e782ebc472e9c73fe93e6e326fbc86aac5a7f8e0` |
-| `PWM-Heater-web.bin` | `4b5cd2eeb31c186e9b9743a252ab6d41e7af2bd6326cbd6c66cd83a09485fc59` |
+| `PWM-Heater-web.hex` | `6a96d1c909d9752d376744dd07a1b95e894aa24d9378a0ed65a5858269362713` |
+| `PWM-Heater-web.bin` | `43836bb9bf82606f2734896d7902df2f8c76f5d53cd548f07f941c3e00c05450` |
 
 烧录：
 
@@ -20,8 +20,22 @@
 st-flash --reset write stm32/firmware/PWM-Heater-web.bin 0x08000000
 ```
 
-2026-11-17 目标板已烧录该校验版本（18,108 B）并通过 `st-flash` 校验。
-本版在 Web 直控基础上增加了温控执行器：
+2026-11-18 目标板已烧录并校验（18,224 B）。本版在 2026-11-17 温控执行器
+基础上把 `HEATER` 的 duty 解释为两路合计功率，并在 `THERMAL_CONFIG`
+保留字节 bit0 选择通道模式：
+
+默认 `balanced`：HEAT1=HEAT2=duty；`split`（reserved bit0=1）时：
+
+```text
+d1 = min(1000, 2 * duty)
+d2 = 2 * duty - d1
+```
+
+- balanced 600‰：两路各 600‰，合计约 9 W，5V 峰值约 3A，需要 5V/3A 以上；
+- split 600‰：HEAT1=1000‰、HEAT2=200‰，合计约 9 W，峰值约 1.8A，适合 5V/2A；
+- split 500‰：HEAT1=1000‰、HEAT2=0‰，合计约 7.5 W，峰值约 1.5A。
+
+本版仍包含 Web 直控和温控执行器：
 
 - SPI1 从机改为 **软件 NSS**（`SSM=1, SSI=0`）。总线上只有 STM32 一个
   从机时，外部 CS 线即使松动也不会挡住 64 字节事务；A24→PA4 的 CS 线

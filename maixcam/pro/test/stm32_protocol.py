@@ -180,11 +180,13 @@ def set_lamps(duties) -> bytes:
 def thermal_config(setpoint_mc: int, margin_mc: int,
                    kp_x100: int = 6000, ki_x100: int = 200,
                    kd_x100: int = 0, max_duty: int = 300,
-                   enable: bool = True) -> bytes:
+                   enable: bool = True, split_heat: bool = False) -> bytes:
     """Configure the actuator safety envelope.
 
     Kp/Ki/Kd are expressed as value*100; the PID itself runs on the host CLI.
-    max_duty is 0..1000 permille.
+    max_duty is 0..1000 total permille.  split_heat drives HEAT1=1000 and the
+    remainder on HEAT2 for a 5 V/2 A supply; the default balanced mode drives
+    both banks equally and needs a 5 V/3 A supply at 600+ permille.
     """
     return tlv(TLV_THERMAL_CONFIG, struct.pack(
         "<IIHHHHBB",
@@ -195,13 +197,16 @@ def thermal_config(setpoint_mc: int, margin_mc: int,
         max(0, min(0xFFFF, int(kd_x100))),
         max(0, min(1000, int(max_duty))),
         1 if enable else 0,
-        0,
+        1 if split_heat else 0,
     ))
 
 
 def heater(duty: int, enable: bool = True) -> bytes:
-    """Request HEAT1/HEAT2 duty in permille.  The STM32 clamps and applies
-    temperature/over-temperature safety before writing the PWM."""
+    """Request total HEAT1+HEAT2 power in permille of 15 W.
+
+    The STM32 clamps and applies temperature/over-temperature safety before
+    driving the two channels; THERMAL_CONFIG selects balanced or split mode.
+    """
     return tlv(TLV_HEATER, struct.pack(
         "<HBB",
         max(0, min(1000, int(duty))),

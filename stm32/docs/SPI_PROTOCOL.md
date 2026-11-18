@@ -170,9 +170,9 @@ u16 duty_permille[13]     PWM1..PWM13，0..1000
 8  u16  kp_x100         Kp * 100，单位 permille/°C
 10 u16  ki_x100         Ki * 100，单位 permille/(°C*s)
 12 u16  kd_x100         Kd * 100，默认 0（传感器 1 Hz，D 易放大噪声）
-14 u16  max_duty        HEAT 最大占空比，0..1000 permille
+14 u16  max_duty        HEAT 最大总功率，0..1000 permille
 16 u8   enable          1=允许加热，0=强制关闭
-17 u8   reserved        0
+17 u8   reserved        bit0=split channel mode; else balanced
 ```
 
 配置只建立 STM32 的安全包络；PID 运算在 MaixCAM 的
@@ -182,10 +182,21 @@ u16 duty_permille[13]     PWM1..PWM13，0..1000
 #### HEATER = 0x31，len = 4
 
 ```text
-0  u16  duty_permille   请求 HEAT1/HEAT2 占空比，0..1000
+0  u16  duty_permille   请求的总加热功率，0..1000（15 W 的百分比）
 2  u8   enable          1=允许，0=关闭
 3  u8   reserved        0
 ```
+
+`duty_permille` 是**两路合计功率**，不是每路都乘以该占空比。
+
+`THERMAL_CONFIG` 的 reserved 字节 bit0 选择通道模式：
+
+- 0 = balanced（默认）：HEAT1=HEAT2=duty；600‰ 峰值约 3A，需要 5V/3A+；
+- 1 = split：`d1 = min(1000, 2*duty)`，`d2 = 2*duty-d1`；600‰ 为
+  HEAT1=1000‰、HEAT2=200‰，总功率仍约 9W，峰值约 1.8A；500‰ 为
+  HEAT1=1000‰、HEAT2=0‰，总功率 7.5W，适合 5V/2A。
+
+STATUS 的 `heater_duty` 回显这个总功率值。
 
 主机应周期发送（建议 1 Hz 或更快）。STM32 仍会执行以下硬保护：
 

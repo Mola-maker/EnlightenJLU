@@ -143,6 +143,25 @@ SHA256 b1d268529084ee431a35fbf1d862a7741d3fca3801f88621c1f97d6805e0be91
 PWM1–PWM13。网页 `fault_flags=0`、`direct_ready=true`，`last_control_seq`
 随命令递增，说明 STM32 已实际接收控制帧。
 
+### 2026-11-18 温控执行器固件（总功率拆分）
+
+```text
+firmware/PWM-Heater-web.bin
+SHA256 b56282955381cbd68e813a325e8d31d0a4cad2dc030c4a8144963d81d6a78b15
+```
+
+已烧录并校验（18,224 B）。在 2026-11-17 温控执行器基础上，把 `HEATER`
+的 duty 解释为两路合计功率，并由 `THERMAL_CONFIG` 保留字节 bit0 选择：
+
+- balanced（默认）：HEAT1=HEAT2=duty；600‰ 两路各 600‰，合计约 9W，
+  峰值约 3A，需要 5V/3A 以上；
+- split（bit0=1）：`d1=min(1000,2*duty)`，`d2=2*duty-d1`；600‰ 为
+  HEAT1=1000‰、HEAT2=200‰，合计约 9W，峰值约 1.8A，适合 5V/2A；
+  500‰ 为 HEAT1=1000‰、HEAT2=0‰，合计约 7.5W。
+
+软件只能降低母线峰值；若 600‰ 仍出现“duty 回读不变但温度反降”，
+需要现场确认适配器/电阻组是否进入热保护。
+
 ### 2026-11-17 温控执行器固件
 
 ```text

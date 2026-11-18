@@ -14,6 +14,9 @@ This module uses three simple rules:
   the measured holding duty instead of the accumulated saturation value.
 * Integral action is conditional: it is frozen whenever the total PI output
   is already saturated in the same direction as the current error.
+* The P term uses a filtered 45 s slope and a 90 s look-ahead.  The SG2002
+  sensor lags the heater plate by a long time; without this prediction the
+  controller overshoots by 3-4 C before a conventional P term reacts.
 
 The result is still a normal PI controller near the setpoint, but it has a
 sensible starting point and cannot accumulate a large hidden duty during the
@@ -21,6 +24,7 @@ initial heat-up.
 """
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 
 
@@ -37,6 +41,8 @@ class PiOutput:
     output: float
     warmup: bool
     overtemp: bool
+    predicted_c: float = 0.0
+    slope_c_per_s: float = 0.0
 
 
 class ThermalPI:
@@ -50,9 +56,14 @@ class ThermalPI:
         ki: float = 1.0,
         kd: float = 0.0,
         max_duty: int = 600,
-        hold_duty: int = 350,
-        warmup_band_c: float = 2.0,
+        hold_duty: int = 170,
+        warmup_band_c: float = 4.0,
         warmup_hysteresis_c: float = 0.5,
+        integral_window_c: float = 0.6,
+        integral_slow_factor: float = 0.05,
+        slope_window_s: float = 45.0,
+        slope_lookahead_s: float = 90.0,
+        slope_deadband_c_per_s: float = 0.003,
     ):
         if max_duty < 0 or max_duty > 1000:
             raise ValueError("max_duty must be 0..1000")
@@ -64,6 +75,16 @@ class ThermalPI:
             raise ValueError("warmup_band_c must be >= 0")
         if warmup_hysteresis_c < 0:
             raise ValueError("warmup_hysteresis_c must be >= 0")
+        if integral_window_c < 0:
+            raise ValueError("integral_window_c must be >= 0")
+        if not 0.0 <= integral_slow_factor <= 1.0:
+            raise ValueError("integral_slow_factor must be 0..1")
+        if slope_window_s < 3.0:
+            raise ValueError("slope_window_s must be >= 3")
+        if slope_lookahead_s < 0.0:
+            raise ValueError("slope_lookahead_s must be >= 0")
+        if slope_deadband_c_per_s < 0.0:
+            raise ValueError("slope_deadband_c_per_s must be >= 0")
 
         self.setpoint_c = float(setpoint_c)
         self.margin_c = float(margin_c)
@@ -74,7 +95,13 @@ class ThermalPI:
         self.hold_duty = min(int(hold_duty), int(max_duty))
         self.warmup_band_c = float(warmup_band_c)
         self.warmup_hysteresis_c = float(warmup_hysteresis_c)
+        self.integral_window_c = float(integral_window_c)
+        self.integral_slow_factor = float(integral_slow_factor)
+        self.slope_window_s = float(slope_window_s)
+        self.slope_lookahead_s = float(slope_lookahead_s)
+        self.slope_deadband_c_per_s = float(slope_deadband_c_per_s)
 
+        self._samples = deque()
         self._integral = float(self.hold_duty)
         self._previous_temp_c = None
         self._previous_tick = None
@@ -107,11 +134,40 @@ class ThermalPI:
             overtemp=self._overtemp,
         )
 
+    def _slope(self, now):
+        """Least-squares slope over the recent sensor window."""
+        while self._samples and self._samples[0][0] < now - self.slope_window_s:
+            self._samples.popleft()
+        if len(self._samples) < 5:
+            return 0.0
+        t0 = self._samples[0][0]
+        times = [sample[0] - t0 for sample in self._samples]
+        temps = [sample[1] for sample in self._samples]
+        if times[-1] < 5.0:
+            return 0.0
+        mean_t = sum(times) / len(times)
+        mean_temp = sum(temps) / len(temps)
+        denom = sum((t - mean_t) ** 2 for t in times)
+        if denom <= 0.0:
+            return 0.0
+        slope = sum((t - mean_t) * (temp - mean_temp)
+                    for t, temp in zip(times, temps)) / denom
+        if abs(slope) < self.slope_deadband_c_per_s:
+            return 0.0
+        return slope
+
     def update(self, temp_c: float, now: float) -> PiOutput:
         """Compute one control step from a valid temperature sample."""
         temp_c = float(temp_c)
+        self._samples.append((now, temp_c))
+        slope = self._slope(now)
+        # The heater/plate -> SG2002 path has a long lag.  Predict only
+        # heating, never cooling, and use the predicted temperature for P.
+        # A cooling prediction would turn the heater on earlier, which is not
+        # what the long-lag plant needs.
+        predicted_c = temp_c + max(0.0, slope) * self.slope_lookahead_s
         error_c = self.setpoint_c - temp_c
-        p_term = self.kp * error_c
+        p_term = self.kp * (self.setpoint_c - predicted_c)
         d_term = 0.0
 
         if (self.kd > 0.0 and self._previous_temp_c is not None and
@@ -153,7 +209,15 @@ class ThermalPI:
 
                 dt = (1.0 if self._previous_tick is None else
                       clamp(now - self._previous_tick, 0.05, 5.0))
-                candidate = self._integral + self.ki * error_c * dt
+                # While approaching from far away, only trim the integrator
+                # very slowly.  The measured SG2002 sensor often sits on a
+                # quantised plateau for many seconds; full Ki there winds the
+                # output up and causes the slow 41 -> 44 C overshoot seen on
+                # 2026-11-17.  Close to the target, integration is normal.
+                integral_rate = self.ki * error_c
+                if abs(error_c) > self.integral_window_c:
+                    integral_rate *= self.integral_slow_factor
+                candidate = self._integral + integral_rate * dt
                 candidate = clamp(candidate, 0.0, float(self.max_duty))
                 unsaturated = p_term + candidate + d_term
                 if ((unsaturated > self.max_duty and error_c > 0.0) or
@@ -173,5 +237,7 @@ class ThermalPI:
             output=output,
             warmup=self._warmup,
             overtemp=self._overtemp,
+            predicted_c=predicted_c,
+            slope_c_per_s=slope,
         )
         return self._last

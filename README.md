@@ -228,8 +228,12 @@ st-flash --reset write stm32/firmware/PWM-Heater.bin 0x08000000
 - Web 直控需要 `firmware/PWM-Heater-web.bin`（`SET_LAMPS`）；
 - 温控 PID 在 `maixcam/pro/test/tools/thermal_pid.py` 命令行端运行，
   STM32 执行 HEAT1/HEAT2，并在未配置、温度无效/过期、过温、链路丢失时强制 0%；
-- 默认 PI（Kd=0），目标 43 °C，硬上限 46 °C；加热上限默认 600‰，接近目标时
-  从 350‰ 的保持占空比开始 PI，避免冷启动时积分饱和；
+- 默认 PI（Kd=0），目标 43 °C，硬上限 46 °C；加热上限默认 500‰（5V/2A
+  适配器保守值），接近目标时从 170‰ 的保持占空比开始 PI；P 项使用 45 s
+  斜率滤波和 90 s 温度预测，补偿 SoC 传感器/加热板的长滞后；
+- HEATER duty 是两路合计功率；默认 balanced（两路同 duty），`--split-heat`
+  时拆成 HEAT1/HEAT2（600‰ -> 1000/200）以适配 5V/2A；600‰ balanced 需要
+  5V/3A 以上电源；
 - SPI 链路恢复时 HELLO + THERMAL_CONFIG 合并到同一帧；连续坏帧会重新打开
   `/dev/spidev4.0`，日志同时打印 STM32 uptime/复位次数和真实链路状态。
 
@@ -264,7 +268,7 @@ SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 2026-11-08 已完成 MaixCAM Pro 整机联调：
 
 - Web 固件 `PWM-Heater-web.bin` 已烧录并校验，SHA256
-  `4b5cd2eeb31c186e9b9743a252ab6d41e7af2bd6326cbd6c66cd83a09485fc59`；
+  `43836bb9bf82606f2734896d7902df2f8c76f5d53cd548f07f941c3e00c05450`；
 - `direct_ready=true`，13 路 0–100% 亮度直控可用；
 - 温控执行器已加入 `THERMAL_CONFIG` / `HEATER`，HEAT1/HEAT2 可由 PID 命令控制；
 - 软件 SPI4 采用 **100 kHz**；STM32 改为软件 NSS（单从机），解决外部 CS
@@ -277,9 +281,10 @@ SHA256 5fcb600380c41cd2619e35c9e5158ee10e6a86e7c56c53df17ff6707ff81ca78
 - PID 调试改用命令行 `tools/temp_monitor.py` 实时打印结温，支持
   text/CSV/JSON 和滚动 min/max/avg；Web 控制台不再作为温度调试入口；
 - 温控命令行 `tools/thermal_pid.py` 支持 dry-run、`--enable`、Kp/Ki/Kd、
-  最大占空比、保持占空比/暖启动和过温保护；2026-11-17 实测 600‰ 上限下
-  能到 43 °C 附近，但长时间运行时 STM32 曾掉线并清空配置，需结合新日志中的
-  `up/rst/fault` 判断是供电跌落、MCU 复位还是 SPI 总线问题；
+  最大总功率、保持占空比/暖启动、斜率预测、积分窗口和过温保护；
+  2026-11-18 多次复现“duty 回读仍为 600/500、STM32 未复位、温度反降”，
+  定位为 5V 适配器/加热支路进入热保护；split 可降低峰值，但长时间高功率
+  仍需稳定 5V/5A 级电源或间歇加热；
 - 应用黑屏根因是 `rcS` 的 `S??*` 通配符把 `S06maixapp.*.bak` 当成启动脚本，
   多个 launcher 同时抢占 `/dev/cvi-vo`；备份已移到 `/root/surplife/init_backups`。
 
