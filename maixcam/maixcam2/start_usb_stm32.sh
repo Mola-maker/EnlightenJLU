@@ -4,8 +4,8 @@
 # This is the hardware path: SenseVoice recognizes Chinese "长春", the app
 # sends PERFORM GATE/RELEASE to the STM32 over SPI2/CS1, and the STM32 drives
 # PWM1..PWM13.  It intentionally does not use the MaixCAM Pro test's
-# "ha1 lou2"/"wei1 er2 kang1" pinyin proxy keywords; MaixCAM2 uses its own
-# SenseVoice model and Chinese keyword configuration.
+# English-proxy keyword set; MaixCAM2 uses its own SenseVoice model and
+# Chinese keyword configuration.
 set -u
 
 ROOT=/root/JLU_LEDLAB

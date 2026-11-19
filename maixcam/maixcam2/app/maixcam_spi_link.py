@@ -21,7 +21,7 @@ transport:
 
 This module must not import the MaixCAM Pro keyword test.  MaixCAM2 uses the
 external SenseVoice model and Chinese text matching; the Pro test's
-``ha1 lou2`` / ``wei1 er2 kang1`` pinyin proxies are deliberately absent.
+English-proxy keyword set is deliberately absent.
 """
 
 from __future__ import annotations

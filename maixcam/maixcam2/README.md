@@ -95,9 +95,9 @@ MaixCAM Pro, adapted to the hardware SPI2/CS1 controller:
   a 500 ms link timeout recovers without restarting the app;
 - `/tmp/stm32-spi2.lock` prevents a stale process from interleaving frames.
 
-The Pro test's `ha1 lou2` / `wei1 er2 kang1` KWS proxies are intentionally
-not used here: MaixCAM2 keeps its SenseVoice model and the Chinese
-`keywords.json` (长/春/昂/长春).
+The Pro test's English-proxy KWS set is intentionally not used here:
+MaixCAM2 keeps its SenseVoice model and the Chinese `keywords.json`
+(长/春/昂/长春).
 
 On a recognized `长春` phrase the app sends:
 
