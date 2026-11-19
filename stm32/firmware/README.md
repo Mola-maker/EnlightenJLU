@@ -20,6 +20,21 @@
 st-flash --reset write stm32/firmware/PWM-Heater-web.bin 0x08000000
 ```
 
+如果 USB 枚举成 `0d28:0204 DAPLink CMSIS-DAP` 而不是
+`0483:3748 ST-LINK/V2`，可用 OpenOCD：
+
+```sh
+openocd -f interface/cmsis-dap.cfg -f target/stm32f1x.cfg \
+  -c "adapter speed 1000; init; reset halt; \
+      flash write_image erase stm32/firmware/PWM-Heater-web.bin 0x08000000; \
+      verify_image stm32/firmware/PWM-Heater-web.bin 0x08000000; \
+      reset run; shutdown"
+```
+
+2026-11-19 已用 DAPLink CMSIS-DAP（`0d28:0204`，OpenOCD 0.12.0）写入同一
+`PWM-Heater-web.bin`，OpenOCD 报告 device id `0x20036410`、flash 64 KiB；
+回读 18,224 B 的 SHA256 与文件一致，随后 `reset run`。
+
 2026-11-18 目标板已烧录并校验（18,224 B）。本版在 2026-11-17 温控执行器
 基础上把 `HEATER` 的 duty 解释为两路合计功率，并在 `THERMAL_CONFIG`
 保留字节 bit0 选择通道模式：
