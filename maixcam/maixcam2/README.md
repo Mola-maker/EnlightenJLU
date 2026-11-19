@@ -107,6 +107,15 @@ PERFORM GATE, glyph_mask=0x3
 
 and schedules a `RELEASE` after the configured demo hold time.
 
+2026-11-19 实测（MaixCAM2 SPI2/CS1 + `PWM-Heater-web` 固件）：
+
+- STM32 STATUS 返回 `LINK_ACTIVE`；
+- SenseVoice 识别 `长春` 后发送 `PERFORM GATE mask=0x3 event=1`；
+- 1.2 s 后发送 `PERFORM RELEASE mask=0x3 event=2`；
+- MaixCAM2 读回 STM32 STATUS `active_mask=0x3`，GATE/RELEASE 事件序号均被确认。
+
+传输层会对偶发坏帧进行有界重试，控制事件不会因为单次坏帧丢失。
+
 To run the USB microphone with the STM32 SPI path (after wiring SPI2/CS1 to
 the STM32 board):
 
