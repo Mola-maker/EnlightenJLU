@@ -1,26 +1,32 @@
-"""Minimal MaixCAM SPI master link for the STM32 PWM-Heater board.
+"""Robust MaixCAM2 SPI master link for the STM32 PWM-Heater board.
 
-This is a transport/reference module.  On MaixCAM Pro the tested
-raw-spidev path is maixcam/pro/test/spi_link.py (software SPI4, /dev/spidev4.0);
-this module uses the MaixPy hardware SPI API and is primarily used on MaixCAM2.
+This transport is the MaixCAM2 counterpart of the tested MaixCAM Pro
+transport in ``maixcam/pro/test/spi_link.py``.  The two boards use different
+SPI controllers:
 
-Typical use from a lightweight link process:
+* MaixCAM2: hardware SPI2/CS1 on B20/B19/B21/B18 (``/dev/spidev2.1``).
+* MaixCAM Pro: software SPI4 on A22/A23/A24/A25 (``/dev/spidev4.0``).
 
-    link = Stm32SpiLink()
-    link.set_temp(temp_mc, sample_seq, age_ms, valid=True)
-    link.queue_perform(glyph_mask=0x3, action=ACTION_GATE)
-    while running:
-        status = link.transaction()
-        ...
-        time.sleep(0.05)
+The communication-hardening rules are intentionally shared with the Pro
+transport:
 
-The STM32 parses a request after the SPI transaction, so its STATUS response
-is observed on the next transaction.  Pending PERFORM events are resent until
-STATUS.last_event_seq acknowledges them.
+* 100 kHz default, which is the proven production rate for the STM32 link;
+* bounded retries with a short delay;
+* validate magic/length/CRC, and tolerate the one-byte leading glitch seen
+  on some bit-banged/software-SPI captures;
+* keep re-sending HELLO until a later STATUS reports LINK_ACTIVE, so an STM32
+  reset or a 500 ms link timeout recovers without restarting Python;
+* an inter-process ``flock`` so a stale web/thermal process cannot interleave
+  frames with the voice process on the same bus.
+
+This module must not import the MaixCAM Pro keyword test.  MaixCAM2 uses the
+external SenseVoice model and Chinese text matching; the Pro test's
+``ha1 lou2`` / ``wei1 er2 kang1`` pinyin proxies are deliberately absent.
 """
 
 from __future__ import annotations
 
+import fcntl
 import os
 import threading
 import time
@@ -28,12 +34,17 @@ import time
 import stm32_protocol as p
 
 
+class SpiTransactionError(RuntimeError):
+    """No valid STATUS frame was received after all retries."""
+
+
 class Stm32SpiLink:
     def __init__(self, spi_id: int | None = None,
-                 frequency: int = 500_000,
+                 frequency: int = 100_000,
                  session_id: int | None = None,
                  retries: int = 6,
-                 retry_delay: float = 0.05):
+                 retry_delay: float = 0.05,
+                 settle_time: float = 0.1):
         from maix import err, pinmap, spi, sys
 
         if sys.device_id() == "maixcam2":
@@ -55,13 +66,30 @@ class Stm32SpiLink:
             }
             default_spi_id = 4
 
-        for pin, function in pins.items():
-            err.check_raise(pinmap.set_pin_function(pin, function),
-                            f"pinmap {pin} -> {function} failed")
+        self._spi = None
+        self.bus_id = default_spi_id if spi_id is None else int(spi_id)
+        self.frequency = int(frequency)
+        self.retries = max(1, int(retries))
+        self.retry_delay = max(0.0, float(retry_delay))
+        self.settle_time = max(0.0, float(settle_time))
+        self._bus_lock_fd = None
 
-        self._spi = spi.SPI(default_spi_id if spi_id is None else spi_id,
-                            spi.Mode.MASTER, frequency,
-                            polarity=0, phase=0, bits=8)
+        self._acquire_bus_lock()
+        try:
+            for pin, function in pins.items():
+                err.check_raise(pinmap.set_pin_function(pin, function),
+                                f"pinmap {pin} -> {function} failed")
+
+            self._spi = spi.SPI(self.bus_id,
+                                spi.Mode.MASTER,
+                                self.frequency,
+                                polarity=0, phase=0, bits=8)
+            if self.settle_time:
+                time.sleep(self.settle_time)
+        except Exception:
+            self._release_bus_lock()
+            raise
+
         self.session_id = session_id or (
             int.from_bytes(os.urandom(4), "little") or 1
         )
@@ -76,8 +104,38 @@ class Stm32SpiLink:
         self._last_caps = None
         self._started = time.monotonic()
         self._lock = threading.Lock()
-        self.retries = max(1, int(retries))
-        self.retry_delay = max(0.0, float(retry_delay))
+
+    def _acquire_bus_lock(self) -> None:
+        """Prevent two MaixCAM2 processes from clocking the same STM32 bus."""
+        path = f"/tmp/stm32-spi{self.bus_id}.lock"
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            os.close(fd)
+            raise RuntimeError(
+                f"SPI bus {self.bus_id} is already owned by another process "
+                f"({path})") from exc
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+        except OSError:
+            pass
+        self._bus_lock_fd = fd
+
+    def _release_bus_lock(self) -> None:
+        fd = getattr(self, "_bus_lock_fd", None)
+        self._bus_lock_fd = None
+        if fd is None:
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
     @property
     def status(self):
@@ -110,11 +168,12 @@ class Stm32SpiLink:
         with self._lock:
             self._direct_duties = None
             event_seq = self._event_seq
-        self._event_seq += 1
-        event = p.perform(glyph_mask, action, event_seq, profile_id, value)
-        with self._lock:
-            self._pending_event = (event, event_seq)
-        return event_seq
+            self._event_seq = (self._event_seq + 1) & 0xFFFFFFFF
+            self._pending_event = (
+                p.perform(glyph_mask, action, event_seq, profile_id, value),
+                event_seq,
+            )
+            return event_seq
 
     def queue_all_off(self) -> None:
         with self._lock:
@@ -146,22 +205,46 @@ class Stm32SpiLink:
 
         payload = b"".join(chunks)
         if len(payload) > p.MAX_PAYLOAD:
-            # In practice HELLO/TEMP/PERFORM/HB are small enough.  Drop the
-            # optional temperature chunk before giving up.
-            payload = b"".join(chunk for chunk in chunks
-                               if chunk is not self._temp)
+            # Temperature is optional; never let it crowd out a control event.
+            payload = b"".join(chunk for chunk in chunks if chunk is not self._temp)
         if len(payload) > p.MAX_PAYLOAD:
             raise RuntimeError("SPI v1 payload exceeds 44 bytes")
         return payload
 
-    def _transaction_once(self, payload):
+    @staticmethod
+    def _parse_status_tolerant(raw: bytes):
+        """Parse STATUS, tolerating one leading glitch byte.
+
+        The Pro software-SPI transport occasionally returns one extra leading
+        byte and drops the final reserved zero.  The shifted frame still has a
+        valid CRC once the first byte is removed and the reserved zero is
+        restored.  This is harmless for MaixCAM2 hardware SPI and makes the
+        shared recovery logic portable.
+        """
+        candidates = [raw]
+        if raw[:2] != b"\x5a\xa5" and raw[1:3] == b"\x5a\xa5":
+            candidates.append(raw[1:] + b"\x00")
+
+        last_error = None
+        for candidate in candidates:
+            try:
+                return p.parse_status(candidate)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+        raise SpiTransactionError(
+            f"invalid SPI response: {last_error}") from last_error
+
+    def _transaction_once(self, payload: bytes):
+        if self._spi is None:
+            raise SpiTransactionError("SPI transport is closed")
         seq = self.seq
         self.seq = (self.seq + 1) & 0xFFFFFFFF
         tx = p.build_frame(p.TYPE_CONTROL, seq, self.session_id, payload)
-        rx = bytes(self._spi.write_read(tx, len(tx)))
-        if len(rx) != p.FRAME_SIZE:
-            raise RuntimeError(f"short SPI response: {len(rx)}")
-        return p.parse_status(rx)
+        rx = self._spi.write_read(tx, len(tx))
+        if not isinstance(rx, (bytes, bytearray)) or len(rx) != p.FRAME_SIZE:
+            raise SpiTransactionError(
+                f"short SPI response: {len(rx) if rx else 0}")
+        return self._parse_status_tolerant(bytes(rx))
 
     def transaction(self):
         with self._lock:
@@ -177,12 +260,12 @@ class Stm32SpiLink:
                     if attempt + 1 < self.retries:
                         time.sleep(self.retry_delay)
             else:
-                raise RuntimeError(
+                raise SpiTransactionError(
                     f"invalid SPI response after {self.retries} "
                     f"attempts: {last_error}") from last_error
 
             self._last_status = status
-            self._last_caps = caps
+            self._last_caps = caps or self._last_caps
 
             # STATUS is one transaction behind.  Keep HELLO pending until
             # a later STATUS confirms ACTIVE; this recovers from an STM32
@@ -201,9 +284,13 @@ class Stm32SpiLink:
             return status
 
     def close(self):
-        close = getattr(self._spi, "close", None)
-        if close is not None:
-            try:
-                close()
-            except Exception:  # noqa: BLE001
-                pass
+        with self._lock:
+            spi = self._spi
+            self._spi = None
+            close = getattr(spi, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._release_bus_lock()

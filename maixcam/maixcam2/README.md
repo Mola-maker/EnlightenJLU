@@ -31,6 +31,8 @@ uses the system model directory:
   run/
   run_voice.sh
   start.sh
+  start_usb_stm32.sh
+  start_usb_local.sh
   stop.sh
 ```
 
@@ -84,6 +86,19 @@ MaixCAM2 uses:
 The STM32 receives `HELLO`, `TEMP`, `PERFORM`, and `HEARTBEAT` according to
 `docs/SPI_PROTOCOL.md` in the STM32 project.
 
+The MaixCAM2 transport borrows the communication hardening proven on
+MaixCAM Pro, adapted to the hardware SPI2/CS1 controller:
+
+- 100 kHz default, bounded retries, and frame magic/length/CRC validation;
+- one-byte leading-glitch recovery for shifted STATUS responses;
+- keep sending HELLO until STATUS reports `LINK_ACTIVE`, so an STM32 reset or
+  a 500 ms link timeout recovers without restarting the app;
+- `/tmp/stm32-spi2.lock` prevents a stale process from interleaving frames.
+
+The Pro test's `ha1 lou2` / `wei1 er2 kang1` KWS proxies are intentionally
+not used here: MaixCAM2 keeps its SenseVoice model and the Chinese
+`keywords.json` (长/春/昂/长春).
+
 On a recognized `长春` phrase the app sends:
 
 ```text
@@ -91,6 +106,18 @@ PERFORM GATE, glyph_mask=0x3
 ```
 
 and schedules a `RELEASE` after the configured demo hold time.
+
+To run the USB microphone with the STM32 SPI path (after wiring SPI2/CS1 to
+the STM32 board):
+
+```sh
+cd /root/JLU_LEDLAB
+./start_usb_stm32.sh
+```
+
+`start_usb_stm32.sh` enables the USB Audio input if needed, then calls
+`./start.sh --usb-mic` without `--local-pwm`, so the app opens the STM32 link
+and sends the real `PERFORM` events.
 
 ## Local A30 / PWM6 fallback
 
