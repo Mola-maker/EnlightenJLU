@@ -58,15 +58,15 @@ capture path therefore works.
 The microphone's default capture gain was 0 dB; setting
 `amixer -c 1 cset numid=3 16` raises it to 23.81 dB.
 
-The application path was also checked:
+The application path is now SPI-only:
 
 ```text
-./run_voice.sh --local-pwm --usb-mic
+./start_usb_stm32.sh
 ```
 
-Its child `arecord` opened `/dev/snd/pcmC1D0c`, i.e. the USB card rather than
-the built-in card 0. A30/PWM6 was active during that test, and shutdown
-restored A30 to UART1_TX.
+Its child `arecord` opens `/dev/snd/pcmC1D0c`, i.e. the USB card rather than
+the built-in card 0. MaixCAM2 sends `PERFORM`/`TEMP`/`HEARTBEAT` frames over
+SPI2/CS1 and does not configure any on-board PWM pin.
 
 ## Remaining caveat
 

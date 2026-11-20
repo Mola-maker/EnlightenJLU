@@ -6,7 +6,7 @@ pcm.surplife_mic {
     format "raw"
 }
 
-# voice_pwm: 独立麦克风分流, 不影响旧的 surplife_mic
+# SPI voice service: 独立麦克风分流, 不影响旧的 surplife_mic
 pcm.pwm_mic {
     type file
     slave.pcm "hw:0,0"

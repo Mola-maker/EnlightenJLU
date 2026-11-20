@@ -34,7 +34,6 @@ sys.path.insert(0, str(APP_DIR))
 
 from keyword_matcher import load_config, match_text  # noqa: E402
 from maix import audio, app, sys as maix_sys  # noqa: E402
-from local_pwm import LocalPerfPwm  # noqa: E402
 from maix.sensevoice import Sensevoice  # noqa: E402
 
 import stm32_protocol as proto  # noqa: E402
@@ -198,12 +197,11 @@ class SpiWorker(threading.Thread):
 
 class KeywordApp:
     def __init__(self, cfg: dict, link, wav: str | None,
-                 local_pwm: bool = False, audio_device: str | None = None,
+                 audio_device: str | None = None,
                  voice_rms: float = VOICE_RMS):
         self.cfg = cfg
         self.link = link
         self.wav = wav
-        self.local_pwm = local_pwm
         self.audio_device = audio_device
         self.voice_rms = voice_rms
         self.model_mud = cfg.get("model_mud", "config/sensevoice.mud")
@@ -219,9 +217,7 @@ class KeywordApp:
         self.spi_worker: SpiWorker | None = None
 
     def start(self) -> None:
-        if self.local_pwm and self.link is not None:
-            self.link.start()
-        elif self.link is not None:
+        if self.link is not None:
             self.spi_worker = SpiWorker(self.link, self.stop_event)
             self.spi_worker.start()
 
@@ -246,8 +242,6 @@ class KeywordApp:
                 pass
             if self.spi_worker is not None:
                 self.spi_worker.join(timeout=1.0)
-            if self.local_pwm:
-                self.link.shutdown()
         self.sv.stop()
 
     def _schedule_release(self, glyph_mask: int) -> None:
@@ -376,11 +370,6 @@ def main() -> int:
                         help="recognize one WAV file instead of microphone")
     parser.add_argument("--no-spi", action="store_true",
                         help="do not open the STM32 SPI link")
-    parser.add_argument("--local-pwm", action="store_true",
-                        help="temporary local A30/PWM6 performance output")
-    parser.add_argument("--pwm-pin", default="A30")
-    parser.add_argument("--pwm-id", type=int, default=6)
-    parser.add_argument("--pwm-freq", type=int, default=2000)
     parser.add_argument("--audio-device", default=None,
                         help="ALSA device, e.g. plughw:1,0 for USB mic")
     parser.add_argument("--usb-mic", action="store_true",
@@ -403,18 +392,11 @@ def main() -> int:
         list_keywords(cfg)
         return 0
 
-    if args.local_pwm:
-        link = LocalPerfPwm(pin=args.pwm_pin, pwm_id=args.pwm_id,
-                            frequency=args.pwm_freq)
-    elif args.no_spi:
-        link = None
-    else:
-        link = Stm32SpiLink()
+    link = None if args.no_spi else Stm32SpiLink()
     audio_device = args.audio_device
     if args.usb_mic and not audio_device:
         audio_device = "plughw:1,0"
     application = KeywordApp(cfg, link, args.wav,
-                             local_pwm=args.local_pwm,
                              audio_device=audio_device,
                              voice_rms=args.voice_rms)
 

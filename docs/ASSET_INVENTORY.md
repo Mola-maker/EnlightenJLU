@@ -8,13 +8,29 @@
 
 | 来源 | 内容 | 处置 |
 |---|---|---|
-| `/home/jlu/桌面/EnlightenJLU/surplife/app` | 一代 Pro KWS、门控、A18/A19 PWM、UI、温度读取 | 只保留语音 PWM 相关文件，迁入 `maixcam/pro/app/` |
-| `/home/jlu/桌面/CubeMX/C8T6/PWM-Heater/maixcam2_app` | 二代 SenseVoice、SPI、USB 麦克风、A30/PWM6、UI | 迁入 `maixcam/maixcam2/` |
+| `/home/jlu/桌面/EnlightenJLU/surplife/app` | 一代 Pro KWS、门控、A18/A19 PWM、UI、温度读取 | SPI/KWS/温度辅助迁入 `maixcam/pro/`；本地 PWM 已删除 |
+| `/home/jlu/桌面/CubeMX/C8T6/PWM-Heater/maixcam2_app` | 二代 SenseVoice、SPI、USB 麦克风、A30/PWM6、UI | 迁入 `maixcam/maixcam2/`；本地 PWM 已删除 |
 | `/home/jlu/桌面/CubeMX/C8T6/PWM-Heater` | STM32 15 路 PWM、SPI、表演引擎、保温板占位 | 迁入 `stm32/`，排除 build 和 MaixCAM 子目录 |
 | MaixCAM2 `/root/models/sensevoice-maixcam2` | SenseVoice 权重和运行支撑 | 支撑文件复制到 `model/maixcam2/`；权重外置 |
 | MaixCAM Pro `/root/models/am_3332_192_int8.mud` | 一代 KWS 权重/描述 | 未复制；仅记录 |
 
 清理前目标目录所在文件系统在当前会话中是只读挂载，未能生成额外本地备份；旧版本仍可通过远端 Git 历史和一代 MaixCAM Pro 设备追溯。
+
+### 2026-11-19 去除两代 MaixCAM 的板载 PWM 输出
+
+MaixCAM 不再承担任何板载 PWM 输出，只通过 SPI 发送高层命令；15 路灯牌、
+HEAT1/HEAT2、呼吸和 GATE/HOLD/RELEASE/EGG 全部由 STM32 执行。
+
+已从仓库删除：
+
+- Pro：`app/voice_pwm.py`、`app/live_kws.py`、`app/README_pwm.md`、
+  `app/run_voice_pwm.sh`、`app/start_voice_pwm.sh`、`app/status_voice_pwm.sh`、
+  `app/stop_voice_pwm.sh`、`app/tests/test_voice_pwm.py`；
+- MaixCAM2：`app/local_pwm.py`、`start_usb_local.sh`，以及 `main.py` 中的
+  `--local-pwm` / `--pwm-pin` / `--pwm-id` / `--pwm-freq` 参数。
+
+Pro 的 SPI 主线保留在 `maixcam/pro/test/`，MaixCAM2 的 SPI 主线保留在
+`maixcam/maixcam2/app/`。
 
 ## 2. 新结构
 
@@ -35,29 +51,32 @@ EnlightenJLU/
 来源：`EnlightenJLU/surplife/app`  
 目标：`maixcam/pro/app/`
 
+当前 `app/` 只保留非 PWM 辅助：
+
 | 文件 | 作用 |
 |---|---|
-| `voice_pwm.py` | Maix-Speech KWS、单字/整词门控、A18/PWM6 + A19/PWM7 1 kHz 灯效 |
-| `live_kws.py` | KWS/音量事件发布（FIFO 观察） |
-| ~~`lamp_ui.py`~~ | ~~640×480 触摸灯效测试 UI~~ → **2026-11-18 删除** |
 | `sg2002_temp.py` | SG2002 温度读取 |
 | `asoundrc.surplife` | ALSA file 插件麦克风分流 |
-| `run_voice_pwm.sh` / `start_voice_pwm.sh` / `stop_voice_pwm.sh` / `status_voice_pwm.sh` | 运行和后台管理 |
-| ~~`run_lamp_ui.sh`~~ | ~~UI 启动，暂停/恢复后台语音~~ → **2026-11-18 删除** |
-| `README_pwm.md` | KWS、门限、灯效曲线、接线 |
-| ~~`README_lamp_ui.md`~~ | ~~UI 操作、触摸方向、资源优先级~~ → **2026-11-18 删除** |
 | `README_TEMP_SENSOR.md` | 温度寄存器和换算 |
-| `tests/test_voice_pwm.py` | 门控/评分测试 |
 | `tests/test_sg2002_temp.py` | 温度换算测试 |
-| `VERSION` | 一代业务版本 `0.3.0` |
+| `VERSION` | 一代业务版本 `0.4.0`（SPI-only） |
+
+已删除：
+
+| 文件 | 原因 |
+|---|---|
+| ~~`voice_pwm.py`~~ | ~~KWS + A18/PWM6 + A19/PWM7 本地 PWM~~ → **2026-11-19 删除** |
+| ~~`live_kws.py`~~ | ~~依赖 voice_pwm 的 KWS 观察器~~ → **2026-11-19 删除** |
+| ~~`README_pwm.md`~~ | ~~本地 PWM 接线/曲线~~ → **2026-11-19 删除** |
+| ~~`run_voice_pwm.sh` / `start_voice_pwm.sh` / `stop_voice_pwm.sh` / `status_voice_pwm.sh`~~ | ~~本地 PWM 运行管理~~ → **2026-11-19 删除** |
+| ~~`tests/test_voice_pwm.py`~~ | ~~本地 PWM 逻辑测试~~ → **2026-11-19 删除** |
+| ~~`lamp_ui.py` / `run_lamp_ui.sh` / `README_lamp_ui.md`~~ | ~~触摸 UI~~ → **2026-11-18 删除** |
 
 规模：
 
 ```text
-voice_pwm.py    1534 行
-live_kws.py      258 行
-lamp_ui.py      2375 行   # 2026-11-18 删除
-sg2002_temp.py   166 行
+sg2002_temp.py    166 行
+当前 PWM 输出代码   0 行（全部由 STM32 产生）
 ```
 
 ### 2026-11-18 移除一代板上触摸 UI
@@ -70,12 +89,12 @@ sg2002_temp.py   166 行
 - 灯牌与温控的实际调试入口已迁移到 `maixcam/pro/test/` 的 Web 控制台
   （浏览器 + SSE 实时波形），板上 UI 属重复实现，留着只会让人误以为还有两条并行路径；
 - 需要旧 UI 时从 Git 历史取回（`git log -- maixcam/pro/app/lamp_ui.py`）。
-- `live_kws.py` 保留：它不再驱动 UI，只把门控/概率以 20 Hz JSON 写 FIFO 供观察，
-  FIFO 默认路径改为 `/root/surplife/run/live_kws.fifo`。
+- `live_kws.py` 和依赖它的 `voice_pwm.py` 已于 2026-11-19 一并删除，不再保留
+  任何本地 PWM 参考实现。
 
-### 2026-11-18 板上目录对齐仓库
+### 2026-11-18 板上目录对齐仓库（历史记录）
 
-板端 `/root/surplife/app/` 已与本仓库 `maixcam/pro/app/` **逐文件 md5 一致**。
+板端 `/root/surplife/app/` 当时与本仓库 `maixcam/pro/app/` 逐文件一致。
 清掉的更早 Surplife 遗留件（从未进入本仓库）归档在板上
 `/root/surplife/archive/legacy-surplife/`：
 
@@ -89,10 +108,13 @@ sg2002_temp.py   166 行
 清理前已确认 `/etc/init.d/S99surplife` 用的是 `/root/surplife/test/main.py`（当前主线），
 与被删的 `app/main.py` 无关，自启链不受影响。
 
-当前板上只剩两条明确路径：
+当前仓库只剩一条 Pro 运行主线：
 
-- `/root/surplife/app` —— 一代语音 PWM（KWS + A18/A19 灯效）；
+- `/root/surplife/app` —— 仅保留 `sg2002_temp.py`、`asoundrc.surplife` 等辅助；
 - `/root/surplife/test` —— Web 控制台 + 温控 + SPI 服务（`S99surplife` 开机自启）。
+
+2026-11-19 仓库已删除 Pro 的本地 PWM 代码；Pro 板端若当时离线，需在下次
+上线后删除同一批文件，`app/` 目录只保留温度/ALSA 辅助。
 
 板端运行路径保持：
 
@@ -125,9 +147,9 @@ chang2 chun1
 
 | 文件/目录 | 作用 |
 |---|---|
-| `app/main.py` | SenseVoice、关键词匹配、VAD、SPI 发布、本地 PWM 调度 |
+| `app/main.py` | SenseVoice、关键词匹配、VAD、SPI 高层命令发布 |
 | `app/keyword_matcher.py` | “长/春/长春”字符族和整词匹配 |
-| `app/local_pwm.py` | A30/PWM6 2 kHz 本地表演状态机 |
+| ~~`app/local_pwm.py`~~ | ~~A30/PWM6 本地表演状态机~~ → **2026-11-19 删除** |
 | `app/stm32_protocol.py` | SPI v1 帧/TLV/CRC 参考实现 |
 | `app/maixcam_spi_link.py` | SPI2/CS1 主机传输 |
 | `app/test_keyword_matcher.py` | 关键词匹配单元测试 |
@@ -142,17 +164,18 @@ chang2 chun1
 | `bench/REPORT.md` | 13 字标语 SenseVoice 评测 |
 | `bench/USB_MIC_TEST.md` | USB Audio 测试记录 |
 | `run_voice.sh` / `start.sh` / `stop.sh` | 运行和后台管理 |
-| `start_usb_local.sh` | USB 麦克风 + 临时“长春” + A30/PWM6 |
+| `start_usb_stm32.sh` | USB 麦克风 + SenseVoice + STM32 SPI |
+| ~~`start_usb_local.sh`~~ | ~~USB 麦克风 + A30/PWM6~~ → **2026-11-19 删除** |
 | `README.md` | 二代运行说明 |
 
 核心代码规模：
 
 ```text
-app/main.py                    441 行
-app/local_pwm.py               227 行
+app/main.py                    约 420 行（SPI-only）
 app/stm32_protocol.py          232 行
-app/maixcam_spi_link.py        160 行
+app/maixcam_spi_link.py        约 290 行
 audio_ui/app/mic_ui.py         850 行
+本地 PWM 输出代码               0 行
 ```
 
 板端运行路径保持：

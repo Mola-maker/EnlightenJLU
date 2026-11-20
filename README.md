@@ -49,7 +49,7 @@ ssh root@<设备IP> '/etc/init.d/S99surplife restart'    # 起 Web(80) + KWS
 
 - 语音识别与判断在 MaixCAM，STM32 只接受数字化的 `glyph_mask`、动作与温度；
 - STM32 上电未握手、SPI 断链、`ALL_OFF`、温度无效/超温时，所有输出关闭；
-- 两代 MaixCAM 都保留本地 PWM 作为脱机联调回退，不替代 STM32 的 15 路输出。
+- 两代 MaixCAM 都不再保留板载 PWM 输出路径；所有 PWM 只能由 STM32 产生。
 
 ## 3. 目录结构
 
@@ -58,9 +58,10 @@ EnlightenJLU/
 ├── docs/            # HANDOVER（上手）/ VALIDATION（验证与限制）/ THERMAL_PID_BRINGUP / ASSET_INVENTORY
 ├── model/           # KWS / SenseVoice 描述、运行支撑、清单（大权重外置）
 ├── maixcam/
-│   ├── pro/         # 一代 MaixCAM Pro：KWS、门控、本地 PWM、触摸 UI
-│   │   └── test/    # ← 当前主线：Web 控制台 + 温控 + SPI 服务（板上 /root/surplife/test）
-│   └── maixcam2/    # 二代 MaixCAM2：SenseVoice、SPI、USB 麦克风
+│   ├── pro/         # 一代 MaixCAM Pro：SPI4 KWS/Web/thermal 主线
+│   │   ├── app/     # 仅温度/ALSA 辅助，无 PWM 输出
+│   │   └── test/    # Web 控制台 + 温控 + SPI 服务（/root/surplife/test）
+│   └── maixcam2/    # 二代 MaixCAM2：SenseVoice、SPI、USB 麦克风，无板载 PWM
 └── stm32/           # HAL/CMSIS、15 路 PWM、SPI v1、表演引擎、已验证固件
 ```
 
@@ -68,24 +69,23 @@ EnlightenJLU/
 
 ## 4. 快速开始
 
-### 4.1 一代 MaixCAM Pro（KWS + 灯牌演出）
+### 4.1 一代 MaixCAM Pro（SPI4 + 灯牌演出）
 
 ```sh
-cp -a maixcam/pro/app/. /root/surplife/app/       # 权重留在 /root/models/am_3332_192_int8.mud
-cd /root/surplife/app && ./run_voice_pwm.sh       # 前台
-./start_voice_pwm.sh                              # 或后台：start / status / stop
+cp -a maixcam/pro/app/. /root/surplife/app/       # 温度/ALSA 辅助
+cp -a maixcam/pro/test/. /root/surplife/test/     # SPI/KWS/Web 主线
+cd /root/surplife/test && ./run_test.sh
 ```
 
-> 一代板上的触摸 UI（`lamp_ui.py`）已于 2026-11-18 删除：它在 128 MB 的 Pro 上
-> 与语音模型抢内存（需要靠 `oom_score_adj` 抢优先级），实际灯牌调试已由
-> `maixcam/pro/test/` 的 Web 控制台承担。需要旧 UI 可从 Git 历史取回。
+旧 `app/voice_pwm.py`、A18/A19 本地 PWM、`live_kws.py` 和触摸 UI 已删除；
+Pro 不再配置板载 PWM。需要旧实现可从 Git 历史取回。
 
-### 4.2 二代 MaixCAM2（SenseVoice + 本地临时灯效）
+### 4.2 二代 MaixCAM2（SenseVoice + SPI）
 
 ```sh
 cp -a maixcam/maixcam2/. /root/JLU_LEDLAB/
 cp -a model/maixcam2/sensevoice-maixcam2/. /root/models/sensevoice-maixcam2/
-cd /root/JLU_LEDLAB && ./start_usb_local.sh       # ./stop.sh 停止
+cd /root/JLU_LEDLAB && ./start_usb_stm32.sh       # ./stop.sh 停止
 ./audio_ui/run_mic_ui.sh                          # 麦克风可视化（与语音业务互斥）
 ```
 
