@@ -11,6 +11,14 @@ if [ -f "$PIDFILE" ]; then
     fi
 fi
 
+if [ -f "$ROOT/run/web.pid" ]; then
+    WEB="$(cat "$ROOT/run/web.pid" 2>/dev/null)"
+    if [ -n "$WEB" ] && kill -0 "$WEB" 2>/dev/null; then
+        echo "web console is already running (PID=$WEB); run ./stop_web.sh first"
+        exit 1
+    fi
+fi
+
 cd "$ROOT" || exit 1
 nohup ./run_voice.sh "$@" >>"$LOGFILE" 2>&1 &
 NEW=$!

@@ -98,6 +98,12 @@ class Stm32SpiLink:
         self._hello_pending = True
         self._pending_event: tuple[bytes, int] | None = None
         self._direct_duties = None
+        self._thermal_config = None
+        self._thermal_config_saved = None
+        self._thermal_config_enable = False
+        self._thermal_split_heat = False
+        self._thermal_config_pending = False
+        self._heater = None
         self._temp: bytes | None = None
         self._temp_sent_at = 0.0
         self._last_status = None
@@ -163,6 +169,28 @@ class Stm32SpiLink:
         with self._lock:
             self._direct_duties = None
 
+    def set_thermal_config(self, setpoint_mc: int, margin_mc: int,
+                           kp_x100: int = 6000, ki_x100: int = 200,
+                           kd_x100: int = 0, max_duty: int = 300,
+                           enable: bool = True,
+                           split_heat: bool = False) -> None:
+        with self._lock:
+            config = p.thermal_config(
+                setpoint_mc, margin_mc, kp_x100, ki_x100, kd_x100,
+                max_duty, enable, split_heat)
+            self._thermal_config = config
+            self._thermal_config_saved = config
+            self._thermal_config_enable = bool(enable)
+            self._thermal_split_heat = bool(split_heat)
+
+    def set_heater(self, duty: int, enable: bool = True) -> None:
+        with self._lock:
+            self._heater = p.heater(duty, enable)
+
+    def clear_heater(self) -> None:
+        with self._lock:
+            self._heater = None
+
     def queue_perform(self, glyph_mask: int, action: int,
                       profile_id: int = 0, value: int = 0) -> int:
         with self._lock:
@@ -182,31 +210,51 @@ class Stm32SpiLink:
 
     def _payload(self, now: float) -> bytes:
         # Caller holds self._lock.
-        chunks: list[bytes] = []
+        chunks = []
+
+        def add(kind, value):
+            chunks.append((kind, value))
 
         if self._hello_pending:
-            chunks.append(p.hello(
+            add("hello", p.hello(
                 heartbeat_ms=50,
                 features=(p.FEATURE_PERFORM | p.FEATURE_TEMP |
-                          p.FEATURE_HEARTBEAT)))
+                          p.FEATURE_HEARTBEAT | p.FEATURE_THERMAL_PID)))
         elif self._temp is not None and (now - self._temp_sent_at) >= 1.0:
-            chunks.append(self._temp)
+            add("temp", self._temp)
             self._temp_sent_at = now
 
+        thermal_active = (self._thermal_config is not None or
+                          self._heater is not None)
         if self._pending_event is not None:
-            chunks.append(self._pending_event[0])
+            add("event", self._pending_event[0])
         elif self._direct_duties is not None:
-            chunks.append(p.set_lamps(self._direct_duties))
-        elif not self._hello_pending:
-            chunks.append(p.heartbeat(
+            add("direct", p.set_lamps(self._direct_duties))
+        elif not self._hello_pending and not thermal_active:
+            add("heartbeat", p.heartbeat(
                 maix_uptime_ms=int((now - self._started) * 1000),
                 state_flags=0,
             ))
 
-        payload = b"".join(chunks)
-        if len(payload) > p.MAX_PAYLOAD:
-            # Temperature is optional; never let it crowd out a control event.
-            payload = b"".join(chunk for chunk in chunks if chunk is not self._temp)
+        # Safety configuration travels with HELLO too, so an STM32 reset
+        # cannot leave the heater active but unconfigured.
+        if self._thermal_config is not None:
+            add("thermal_config", self._thermal_config)
+            self._thermal_config_pending = True
+        if self._heater is not None:
+            add("heater", self._heater)
+
+        def pack(items):
+            return b"".join(value for _, value in items)
+
+        payload = pack(chunks)
+        # Keep the 44-byte budget. Drop optional chunks first; never silently
+        # drop the thermal safety configuration.
+        for kind in ("temp", "direct", "heartbeat", "event"):
+            if len(payload) <= p.MAX_PAYLOAD:
+                break
+            chunks = [item for item in chunks if item[0] != kind]
+            payload = pack(chunks)
         if len(payload) > p.MAX_PAYLOAD:
             raise RuntimeError("SPI v1 payload exceeds 44 bytes")
         return payload
@@ -271,6 +319,25 @@ class Stm32SpiLink:
             # a later STATUS confirms ACTIVE; this recovers from an STM32
             # reset or a 500 ms link timeout.
             self._hello_pending = (status.link_state != p.LINK_ACTIVE)
+
+            if self._thermal_config_pending:
+                # THERMAL_CONFIG is periodic, not a keepalive chunk.
+                self._thermal_config = None
+                self._thermal_config_pending = False
+
+            if self._thermal_config_saved is not None:
+                caps_now = self._last_caps or {}
+                supports_thermal = bool(
+                    int(caps_now.get("features", 0)) &
+                    p.FEATURE_THERMAL_PID)
+                configured = bool(status.heater_flags & 0x10)
+                enabled = bool(status.heater_flags & 0x01)
+                need_config = (not configured or
+                               (self._thermal_config_enable and not enabled))
+                if (self._hello_pending or
+                        (supports_thermal and need_config)):
+                    self._thermal_config = self._thermal_config_saved
+                    self._temp_sent_at = 0.0
 
             if self._pending_event is not None:
                 _, event_seq = self._pending_event

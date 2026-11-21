@@ -198,12 +198,14 @@ class SpiWorker(threading.Thread):
 class KeywordApp:
     def __init__(self, cfg: dict, link, wav: str | None,
                  audio_device: str | None = None,
-                 voice_rms: float = VOICE_RMS):
+                 voice_rms: float = VOICE_RMS,
+                 web_feed: bool = False):
         self.cfg = cfg
         self.link = link
         self.wav = wav
         self.audio_device = audio_device
         self.voice_rms = voice_rms
+        self.web_feed = web_feed
         self.model_mud = cfg.get("model_mud", "config/sensevoice.mud")
         if not os.path.isabs(self.model_mud):
             self.model_mud = str(ROOT_DIR / self.model_mud)
@@ -226,6 +228,8 @@ class KeywordApp:
         if not self.sv.is_ready(block=True):
             raise RuntimeError("SenseVoice service/model failed to load")
         log.info("SenseVoice ready")
+        if self.web_feed:
+            print("KWS READY 长春", flush=True)
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -276,6 +280,16 @@ class KeywordApp:
             else:
                 log.info("  phrase=%s matched=%s",
                          match.get("id"), match.get("matched"))
+
+        if result["gate"] and self.web_feed:
+            # The web service owns the SPI bus in web mode.  It consumes this
+            # line and sends PERFORM GATE/RELEASE itself.
+            keyword = "长春"
+            for match in result["matches"]:
+                if match["type"] == "phrase":
+                    keyword = match.get("matched") or keyword
+                    break
+            print(f"TRIGGER {keyword} p=1.000", flush=True)
 
         if result["gate"] and self.link is not None:
             mask = result["glyph_mask"]
@@ -370,6 +384,8 @@ def main() -> int:
                         help="recognize one WAV file instead of microphone")
     parser.add_argument("--no-spi", action="store_true",
                         help="do not open the STM32 SPI link")
+    parser.add_argument("--web-feed", action="store_true",
+                        help="emit KWS READY/TRIGGER lines for tools/spi_service.py")
     parser.add_argument("--audio-device", default=None,
                         help="ALSA device, e.g. plughw:1,0 for USB mic")
     parser.add_argument("--usb-mic", action="store_true",
@@ -398,7 +414,8 @@ def main() -> int:
         audio_device = "plughw:1,0"
     application = KeywordApp(cfg, link, args.wav,
                              audio_device=audio_device,
-                             voice_rms=args.voice_rms)
+                             voice_rms=args.voice_rms,
+                             web_feed=args.web_feed)
 
     def on_signal(signum, frame):  # noqa: ARG001
         application.stop_event.set()

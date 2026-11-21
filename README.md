@@ -85,9 +85,15 @@ Pro 不再配置板载 PWM。需要旧实现可从 Git 历史取回。
 ```sh
 cp -a maixcam/maixcam2/. /root/JLU_LEDLAB/
 cp -a model/maixcam2/sensevoice-maixcam2/. /root/models/sensevoice-maixcam2/
-cd /root/JLU_LEDLAB && ./start_usb_stm32.sh       # ./stop.sh 停止
-./audio_ui/run_mic_ui.sh                          # 麦克风可视化（与语音业务互斥）
+cd /root/JLU_LEDLAB
+
+./start_usb_stm32.sh       # USB 麦克风 + SPI 语音业务，./stop.sh 停止
+./start_web.sh             # Web 中控台 + SPI 语音业务，./stop_web.sh 停止
+# 浏览器访问 http://<MaixCAM2-IP>:8080/
+./audio_ui/run_mic_ui.sh   # 麦克风可视化（与语音业务互斥）
 ```
+
+网页中控台和单独语音业务都独占 SPI2，二者不能同时运行；先停止一个再启动另一个。
 
 ### 4.3 STM32 固件
 

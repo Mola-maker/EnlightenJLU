@@ -11,6 +11,7 @@
 | STM32 链路 | 软件 SPI4，A22–A25 | 硬件 SPI2/CS1，B18–B21 |
 | 运行目录 | `/root/surplife/test` | `/root/JLU_LEDLAB` |
 | 入口 | `test/main.py` | `app/main.py` |
+| Web 中控台 | `test/tools/spi_service.py`，80/8080 | `tools/spi_service.py`，8080 |
 
 ```text
 麦克风 → MaixCAM KWS/ASR → 高层 PERFORM/TEMP/HEARTBEAT → STM32 → 15 PWM

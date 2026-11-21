@@ -165,6 +165,13 @@ chang2 chun1
 | `bench/USB_MIC_TEST.md` | USB Audio 测试记录 |
 | `run_voice.sh` / `start.sh` / `stop.sh` | 运行和后台管理 |
 | `start_usb_stm32.sh` | USB 麦克风 + SenseVoice + STM32 SPI |
+| `start_web.sh` / `stop_web.sh` | Web 中控台 + SPI 语音管线 |
+| `tools/spi_service.py` | SPI2 owner + Flask 中控台（8080） |
+| `tools/web_control.py` | 13 路灯牌/直控波形控制 |
+| `tools/thermal_control.py` / `thermal_pi.py` / `thermal_tuning.py` | 温控状态和 PI |
+| `tools/console_web.py` / `wifi_info.py` | Web API/页面与 WiFi 只读状态 |
+| `tools/S99jluweb` | `/etc/init.d/S99jluweb` 开机启动 |
+| `web/index.html` / `app.js` / `style.css` | 中控台静态页面 |
 | ~~`start_usb_local.sh`~~ | ~~USB 麦克风 + A30/PWM6~~ → **2026-11-19 删除** |
 | `README.md` | 二代运行说明 |
 

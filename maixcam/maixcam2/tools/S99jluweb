@@ -1,0 +1,16 @@
+#!/bin/sh
+# Boot hook for the MaixCAM2 local web console.
+ROOT=/root/JLU_LEDLAB
+case "${1:-start}" in
+    start)   "$ROOT/start_web.sh" ;;
+    stop)    "$ROOT/stop_web.sh" ;;
+    restart) "$ROOT/stop_web.sh"; sleep 1; "$ROOT/start_web.sh" ;;
+    status)
+        if [ -f "$ROOT/run/web.pid" ] && kill -0 "$(cat "$ROOT/run/web.pid" 2>/dev/null)" 2>/dev/null; then
+            echo "jluweb running pid $(cat "$ROOT/run/web.pid")"
+        else
+            echo "jluweb stopped"; exit 1
+        fi
+        ;;
+    *) echo "Usage: $0 start|stop|restart|status"; exit 2 ;;
+esac

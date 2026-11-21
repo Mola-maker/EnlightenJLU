@@ -32,11 +32,22 @@ uses the system model directory:
   config/
     sensevoice.mud          external-model descriptor
     keywords.json           registered phrase/character families
+  tools/
+    spi_service.py          SPI owner + Flask web console
+    web_control.py          lamp/direct-effect controller
+    thermal_control.py      heater PI/thermal state
+    wifi_info.py            read-only WiFi status
+    S99jluweb              boot hook
+  web/
+    index.html              local console page
+    app.js / style.css
   logs/
   run/
   run_voice.sh
   start.sh
   start_usb_stm32.sh
+  start_web.sh
+  stop_web.sh
   stop.sh
 ```
 
@@ -91,6 +102,57 @@ Background management:
 ./start_usb_stm32.sh
 ./stop.sh
 tail -f logs/voice.log
+```
+
+## Web console
+
+MaixCAM2 和 Pro 一样有本地中控台；它由 `tools/spi_service.py` 持有 SPI2
+总线，语音进程以 `--no-spi --web-feed` 运行，只把 `KWS READY/TRIGGER`
+喂给中控台，不直接碰 PWM。
+
+```sh
+cd /root/JLU_LEDLAB
+./start_web.sh
+./stop_web.sh
+tail -f logs/web.log
+```
+
+地址：
+
+```text
+http://192.168.1.190:8080/
+```
+
+MaixCAM2 的 nginx 占用 80 端口，因此本中控台固定在 **8080**；服务绑定
+`0.0.0.0:8080`。页面包含：
+
+- 13 路灯牌波形、网页波形/整体亮度控制；
+- 关键词状态（SenseVoice 识别 `长春` 后触发 GATE/RELEASE）；
+- STM32 温度、HEAT duty、温控曲线；
+- 当前 WiFi SSID / IP（MaixCAM2 上只读显示，不在网页里改写
+  `/etc/wpa_supplicant.conf`）。
+
+网页的 KWS 待机/触发模式沿用 Pro 中控台，使用 `mask=0x4`（PWM1–PWM13
+全灯）；单独运行 `start_usb_stm32.sh` 时仍使用业务配置的 `mask=0x3`
+（长/春）。两者都由 STM32 执行。
+
+温控页的默认整定参数继承自 Pro 的 SG2002 热模型；MaixCAM2 是 AX620E，
+首次使用加热前应重新标定环境温度/无加热结温。加热默认关闭。
+
+`S99jluweb` 已安装到 `/etc/init.d/S99jluweb`，开机自动启动中控台。手动：
+
+```sh
+/etc/init.d/S99jluweb start|status|stop|restart
+```
+
+**不要同时运行**网页中控台和 `start_usb_stm32.sh` / `run_voice.sh`：两者
+都会打开 SPI2 总线；中控台已经持有 `/tmp/stm32-spi2.lock`。先
+`./stop_web.sh`，再单独运行语音业务；反之亦然。
+
+`start_web.sh` 默认使用板载麦克风。USB 麦克风可以用：
+
+```sh
+WEB_VOICE_ARGS="--usb-mic" ./start_web.sh
 ```
 
 ## STM32 link
